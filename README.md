@@ -9,6 +9,47 @@ from A to B using the resulting A–B pair**. NetSquid executes timed gates, mem
 noise and quantum-channel delivery. Q2NS retains its protocol applications and
 classical UDP packet paths.
 
+## Source code
+
+The **ns-3 C++ simulation code is in [examples/](examples/)**. Each Python runner
+starts its compiled ns-3 participant and coordinates it with NetSquid. Paths in
+the tables below are relative to this repository's root.
+
+| Execution mode | ns-3 / Q2NS C++ source | Python entry point |
+|---|---|---|
+| Swap → A/B Teleport workflow | [cosim-chained.cc](examples/cosim-chained.cc) | [run_chained.py](python/run_chained.py) |
+| Independent Swap / R/B Teleport sessions | [cosim-provisioned.cc](examples/cosim-provisioned.cc) | [run_provisioned.py](python/run_provisioned.py) |
+
+| Component | Location and role |
+|---|---|
+| ns-3 event stepping and IPC | [cosim-bridge.h](model/cosim-bridge.h) advances ns-3 at synchronization boundaries and exchanges messages with Python. |
+| Readiness and background UDP traffic | [cosim-agent-app.cc](model/cosim-agent-app.cc) provides the UDP helper; protocol result packets use Q2NS applications. |
+| Shared quantum execution | [execution_core.py](python/execution_core.py) manages requests and resource ownership; [native_core.py](python/native_core.py) runs the shared FIFOs, native completion callbacks and federation. |
+| NetSquid gates and quantum channels | [native_programs.py](python/native_programs.py) defines timed BSM/correction programs; [quantum_network_backend.py](python/quantum_network_backend.py) handles EPR-half delivery and memory placement. |
+| Swap-to-Teleport handoff | [chained_core.py](python/chained_core.py) transfers the actual swapped A/B qubits to the teleport session. |
+| Q2NS application changes | [SwapApp patch](integrations/q2ns-swap-external.patch) and [TeleportationApp patch](integrations/q2ns-teleport-external.patch), installed by [apply_q2ns_patches.py](scripts/apply_q2ns_patches.py). |
+| Build definitions | [CMakeLists.txt](CMakeLists.txt) registers the module; [examples/CMakeLists.txt](examples/CMakeLists.txt) registers both C++ executables. |
+| Inputs, experiments and tests | [scenarios/](scenarios/) contains JSON inputs, [run_sweep.py](scripts/run_sweep.py) runs a delay sweep, and [tests/](tests/) contains validation tests. |
+
+This repository is installed as `contrib/cosim` inside a separate ns-3 checkout.
+The **`./ns3` build script belongs to that parent checkout**; it is supplied by
+ns-3 itself. The installed layout is:
+
+```text
+ns-3.47/                       # Run ./ns3 commands here
+├── ns3                        # Upstream ns-3 build/run script
+└── contrib/
+    ├── q2ns/                  # Separately installed Q2NS, then patched
+    └── cosim/                 # This QuCl repository
+        ├── examples/          # ns-3 C++ simulation sources
+        ├── model/             # ns-3 bridge and UDP helper
+        ├── python/            # Runners and NetSquid execution
+        └── scenarios/         # JSON example inputs
+```
+
+ns-3, Q2NS and NetSquid distributions are installed separately and are not bundled.
+See [Installation](docs/INSTALL.md) for the complete setup commands.
+
 ## Execution flow
 
 ```text
@@ -50,12 +91,12 @@ interpreter used by the ns-3 build wrapper.
 
 | Scenario | Runner | Purpose |
 |---|---|---|
-| [chain](scenarios/chain.json) | `run_chained.py` | One Swap → A/B Teleport workflow |
-| [chain-noiseless](scenarios/chain-noiseless.json) | `run_chained.py` | All six input states with noise disabled |
-| [chain-contention](scenarios/chain-contention.json) | `run_chained.py` | Four workflows with quantum and packet queues |
-| [chain-gate-noise](scenarios/chain-gate-noise.json) | `run_chained.py` | Optional gate depolarization and native memory aging |
-| [swap](scenarios/swap.json) | `run_provisioned.py` | Standalone A–R–B swapping |
-| [mixed](scenarios/mixed.json) | `run_provisioned.py` | Independent Swap and R/B Teleport sessions sharing R/B processors |
+| [chain](scenarios/chain.json) | [run_chained.py](python/run_chained.py) | One Swap → A/B Teleport workflow |
+| [chain-noiseless](scenarios/chain-noiseless.json) | [run_chained.py](python/run_chained.py) | All six input states with noise disabled |
+| [chain-contention](scenarios/chain-contention.json) | [run_chained.py](python/run_chained.py) | Four workflows with quantum and packet queues |
+| [chain-gate-noise](scenarios/chain-gate-noise.json) | [run_chained.py](python/run_chained.py) | Optional gate depolarization and native memory aging |
+| [swap](scenarios/swap.json) | [run_provisioned.py](python/run_provisioned.py) | Standalone A–R–B swapping |
+| [mixed](scenarios/mixed.json) | [run_provisioned.py](python/run_provisioned.py) | Independent Swap and R/B Teleport sessions sharing R/B processors |
 
 The last example intentionally places the independent teleport source at R to
 exercise cross-protocol R contention. In the main chained workflow the teleport
@@ -79,17 +120,6 @@ BSM/correction instructions, and T1/T2 memory noise. Default numerical parameter
 are illustrative simulation settings, not a calibrated hardware model. Dynamic
 EPR generation, channel loss/retries and arbitrary topology configuration are
 not implemented.
-
-## Repository layout
-
-- [python/](python/): execution core, protocol adapters, runners and independent references.
-- [model/](model/) and [examples/](examples/): ns-3 bridge and Q2NS participants.
-- [integrations/](integrations/): patches against the pinned Q2NS source.
-- [scenarios/](scenarios/) and [scripts/](scripts/): runnable inputs and setup/experiment tools.
-- [tests/](tests/): executable validation tests; outputs are generated locally.
-
-This is an ns-3 add-on, installed as `contrib/cosim`. Dependencies are installed
-separately; ns-3, Q2NS and NetSquid distributions are not bundled.
 
 ## License
 
