@@ -8,7 +8,7 @@ def require(ok, message):
         raise RuntimeError("Hybrid validation: " + message)
 
 
-def validate_report(report, expected=None, network=True):
+def validate_report(report, expected=None, network=True, *, r_capacity=1):
     c = report["config"]
     snap = report["snapshot"]
     rows = report.get("ns3_events", [])
@@ -24,8 +24,8 @@ def validate_report(report, expected=None, network=True):
             ),
             "removed command path/node",
         )
-    capacity = 1
-    require(snap["R_execution_capacity"] == capacity, "R execution capacity")
+    require(type(r_capacity) is int and 1 <= r_capacity <= len(c["sessions"]), "invalid R capacity")
+    require(snap["R_execution_capacity"] == r_capacity, "R execution capacity")
 
     def times(value):
         if isinstance(value, dict):
@@ -196,7 +196,7 @@ def validate_report(report, expected=None, network=True):
     require(snap["time_ns"] == expected["simulation_completion_ns"], "final drain boundary")
     from native_validation import validate_report as validate_native
 
-    validate_native(report, expected, network=False)
+    validate_native(report, expected, network=False, r_capacity=r_capacity)
     validate_provisioning(report)
     return dict(
         passed=True,

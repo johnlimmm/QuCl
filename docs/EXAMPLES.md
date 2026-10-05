@@ -106,6 +106,11 @@ resources because all inputs/EPRs are created at time zero.
 
 ## Run tests
 
+For the complete start-interval/load/traffic-phase campaign, calibrated comparison
+models and figure generation, follow [Reproducing the experiments](REPRODUCING.md).
+It uses an explicit parameter profile; the small delay sweep above is a separate
+example and does not reproduce that campaign.
+
 Build both participants, `q2ns-test` and `test-runner` first:
 
 ```bash

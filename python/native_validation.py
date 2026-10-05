@@ -3,8 +3,8 @@
 from session_validation import require, validate_report as validate_common
 
 
-def validate_report(report, expected=None, network=True):
-    result = validate_common(report, expected, network)
+def validate_report(report, expected=None, network=True, *, r_capacity=1):
+    result = validate_common(report, expected, network, r_capacity=r_capacity)
     durations = report["config"]["native_instructions"]
     keys = {
         "CNOT": "cnot_ns",
