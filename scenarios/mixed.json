@@ -1,0 +1,46 @@
+{
+  "name": "mixed",
+  "seed": 7,
+  "quantum_links": {
+    "RA": {
+      "delay_ns": 2000000,
+      "depolar_rate_hz": 0
+    },
+    "RB": {
+      "delay_ns": 1200000,
+      "depolar_rate_hz": 50
+    }
+  },
+  "sessions": [
+    {
+      "session_id": 1,
+      "protocol": "swap",
+      "session_start_ns": 1000000
+    },
+    {
+      "session_id": 2,
+      "protocol": "teleport",
+      "session_start_ns": 1400000,
+      "input_state": "+i"
+    },
+    {
+      "session_id": 3,
+      "protocol": "swap",
+      "session_start_ns": 1800000
+    },
+    {
+      "session_id": 4,
+      "protocol": "teleport",
+      "session_start_ns": 2200000,
+      "input_state": "+i"
+    }
+  ],
+  "background": {
+    "result": {
+      "start_ns": 2200000,
+      "interval_ns": 850000,
+      "count": 8,
+      "payload_bytes": 1000
+    }
+  }
+}

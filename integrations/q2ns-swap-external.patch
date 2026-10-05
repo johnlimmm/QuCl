@@ -1,0 +1,494 @@
+diff --git a/model/q2ns-swap-app.cc b/model/q2ns-swap-app.cc
+index 15cfd0a..87c867f 100644
+--- a/model/q2ns-swap-app.cc
++++ b/model/q2ns-swap-app.cc
+@@ -36,6 +36,7 @@
+ 
+ #include <algorithm>
+ #include <cstring>
++#include <stdexcept>
+ 
+ 
+ namespace q2ns {
+@@ -80,6 +81,7 @@ ns3::TypeId SwapApp::GetTypeId() {
+ }
+ 
+ void SwapApp::StartApplication() {
++  m_started = true;
+   // Subscribe once to qubit arrivals for all sessions on this node
+   if (auto qnode = ns3::DynamicCast<q2ns::QNode>(GetNode())) {
+     qnode->SetRecvCallback([this](std::shared_ptr<q2ns::Qubit> q) {
+@@ -94,6 +96,7 @@ void SwapApp::StartApplication() {
+         auto it = m_sessions.find(sid);
+         if (it != m_sessions.end()) {
+           auto& s = it->second;
++          if (s.external) return;
+           if (!s.qPrev)
+             s.qPrev = std::move(q);
+ 
+@@ -115,6 +118,7 @@ void SwapApp::StartApplication() {
+         auto it = m_sessions.find(sid);
+         if (it != m_sessions.end()) {
+           auto& s = it->second;
++          if (s.external) return;
+           if (!s.qNext)
+             s.qNext = std::move(q);
+ 
+@@ -136,11 +140,16 @@ void SwapApp::StartApplication() {
+   }
+ 
+   for (auto& kv : m_sessions) {
+-    ScheduleSession(kv.second);
++    if (!kv.second.external) ScheduleSession(kv.second);
+   }
+ }
+ 
+ void SwapApp::StopApplication() {
++  m_started = false;
++  m_externalBsm = {};
++  m_externalCorrection = {};
++  m_externalTx = {};
++  m_externalRx = {};
+   for (auto& kv : m_udp4)
+     if (kv.second)
+       kv.second->Close();
+@@ -158,6 +167,82 @@ void SwapApp::StopApplication() {
+   m_sinksByPort.clear();
+ }
+ 
++void SwapApp::SetExternalQuantumCallbacks(ExternalBsmRequest bsm, ExternalCorrectionRequest correction) {
++  if (m_started) throw std::logic_error("Install external callbacks before application start");
++  m_externalBsm = std::move(bsm);
++  m_externalCorrection = std::move(correction);
++}
++
++void SwapApp::SetExternalPacketObservers(ExternalPacketObserver tx, ExternalPacketObserver rx) {
++  if (m_started) throw std::logic_error("Install packet observers before application start");
++  m_externalTx = std::move(tx);
++  m_externalRx = std::move(rx);
++}
++
++void SwapApp::AddExternalSession(const SessionConfig& cfg, const ExternalResources& resources) {
++  // External execution supports single-repeater IPv4/UDP transactions; reject unsupported paths.
++  if (m_started || !GetNode() || !cfg.sid || m_sessions.count(cfg.sid) || m_useIpv6 ||
++      (cfg.proto != "udp" && cfg.proto != "UDP") || cfg.genPrev || cfg.genNext || cfg.verifyFidelity ||
++      cfg.expectedMsgs != 1 || (cfg.role != Role::Repeater && cfg.role != Role::Next) ||
++      (cfg.role == Role::Next && !cfg.applyCorrections) ||
++      (cfg.role == Role::Repeater && (cfg.applyCorrections || cfg.nextEndAddr == ns3::Ipv4Address::GetAny())) ||
++      !cfg.ctrlPort || !resources.pairPrev || !resources.pairNext || !resources.outputPair ||
++      resources.pairPrev == resources.pairNext || resources.pairPrev == resources.outputPair ||
++      resources.pairNext == resources.outputPair ||
++      (cfg.role == Role::Repeater ? !m_externalBsm : !m_externalCorrection)) {
++    throw std::invalid_argument("Invalid external SwapApp session/configuration");
++  }
++  SessionState state;
++  state.cfg = cfg;
++  state.external = true;
++  state.externalResources = resources;
++  m_sessions.emplace(cfg.sid, std::move(state));
++  if (cfg.role == Role::Next) EnsureSink(cfg.ctrlPort, cfg.proto);
++}
++
++SwapApp::SessionState& SwapApp::ExternalSession(uint64_t sid, Role role) {
++  auto it = m_sessions.find(sid);
++  if (!m_started || it == m_sessions.end() || !it->second.external || it->second.cfg.role != role)
++    throw std::logic_error("External SwapApp session is unavailable or has the wrong role");
++  return it->second;
++}
++
++bool SwapApp::RequestExternalBsm(uint64_t sid) {
++  auto& s = ExternalSession(sid, Role::Repeater);
++  if (s.bsmPending || s.haveBSM) return false;
++  s.bsmPending = true;
++  m_traceRoundStart(sid, ns3::Simulator::Now());
++  m_externalBsm(sid, s.externalResources);
++  return true;
++}
++
++bool SwapApp::CompleteExternalBsm(uint64_t sid, uint8_t m1, uint8_t m2) {
++  auto& s = ExternalSession(sid, Role::Repeater);
++  if (m1 > 1 || m2 > 1) throw std::invalid_argument("Invalid external BSM bits");
++  if (s.haveBSM) {
++    if (s.accumM1 != m1 || s.accumM2 != m2) throw std::logic_error("Conflicting external BSM completion");
++    return false;
++  }
++  if (!s.bsmPending) throw std::logic_error("BSM completion without a pending request");
++  s.bsmPending = false;
++  s.haveBSM = true;
++  s.accumM1 = m1;
++  s.accumM2 = m2;
++  // Generate and send the existing Q2NS control packet at external BSM completion.
++  AnnounceBsm(s, m1, m2);
++  return true;
++}
++
++bool SwapApp::CompleteExternalCorrection(uint64_t sid) {
++  auto& s = ExternalSession(sid, Role::Next);
++  if (s.done) return false;
++  if (!s.correctionPending) throw std::logic_error("Correction completion without a pending request");
++  s.correctionPending = false;
++  s.done = true;
++  m_traceCorrectionApplied(sid, ns3::Simulator::Now());
++  return true;
++}
++
+ void SwapApp::AddSession(const SessionConfig& cfg) {
+   SessionState s;
+   s.cfg = cfg;
+@@ -283,6 +368,11 @@ void SwapApp::OnCtrlRx(ns3::Ptr<const ns3::Packet> pkt, const ns3::Address& from
+     return; // not our session
+   auto& s = it->second;
+ 
++  if (s.external) {
++    if (!m_started || s.cfg.role != Role::Next || hdr.m1 > 1 || hdr.m2 > 1 || s.haveF || s.done) return;
++    if (m_externalRx) m_externalRx(hdr.sid, hdr.m1, hdr.m2, pkt->Copy());
++  }
++
+   s.accumM1 ^= hdr.m1;
+   s.accumM2 ^= hdr.m2;
+   s.recv++;
+@@ -309,6 +399,10 @@ void SwapApp::MaybeDoBsmAndAnnounce(SessionState& s) {
+ 
+   uint8_t m1 = static_cast<uint8_t>(bits.first);
+   uint8_t m2 = static_cast<uint8_t>(bits.second);
++  AnnounceBsm(s, m1, m2);
++}
++
++void SwapApp::AnnounceBsm(SessionState& s, uint8_t m1, uint8_t m2) {
+   m_traceBSMDone(s.cfg.sid, ns3::Simulator::Now(), m1, m2);
+ 
+   CtrlHeader hdr{s.cfg.sid, m1, m2};
+@@ -316,6 +410,7 @@ void SwapApp::MaybeDoBsmAndAnnounce(SessionState& s) {
+   std::vector<uint8_t> buf(std::max<uint32_t>(sizeof(CtrlHeader), m_payloadBytes), 0);
+   std::memcpy(buf.data(), &hdr, sizeof(CtrlHeader));
+   ns3::Ptr<ns3::Packet> pkt = ns3::Create<ns3::Packet>(buf.data(), buf.size());
++  if (s.external && m_externalTx) m_externalTx(s.cfg.sid, m1, m2, pkt);
+ 
+ 
+   auto sendV4 = [&](const ns3::Ipv4Address& dst) {
+@@ -323,7 +418,9 @@ void SwapApp::MaybeDoBsmAndAnnounce(SessionState& s) {
+       return;
+     if (s.cfg.proto == "udp" || s.cfg.proto == "UDP") {
+       auto sock = GetOrCreateUdpSender(s.cfg.ctrlPort, /*v6=*/false);
+-      sock->SendTo(pkt->Copy(), 0, ns3::InetSocketAddress(dst, s.cfg.ctrlPort));
++      auto sent = sock->SendTo(pkt->Copy(), 0, ns3::InetSocketAddress(dst, s.cfg.ctrlPort));
++      if (s.external && sent != static_cast<int>(pkt->GetSize()))
++        throw std::runtime_error("External SwapApp UDP send failed");
+     } else {
+       ns3::Address a = ns3::InetSocketAddress(dst, s.cfg.ctrlPort);
+       auto sock = GetOrCreateTcpSender(a, /*v6=*/false, s.cfg.ctrlPort);
+@@ -378,6 +475,12 @@ void SwapApp::TryApply(SessionState& s) {
+     s.done = true;
+     return;
+   } else {
++    if (s.external) {
++      if (s.done || !s.haveF || s.correctionPending) return;
++      s.correctionPending = true;
++      m_externalCorrection(s.cfg.sid, s.externalResources.outputPair, s.accumM1, s.accumM2);
++      return; // Do not allocate Q2NS quantum state or apply the Pauli correction twice.
++    }
+     if (s.done || !s.haveQ || !s.haveF)
+       return;
+     auto qnode = ns3::DynamicCast<q2ns::QNode>(GetNode());
+@@ -508,4 +611,4 @@ ns3::Ptr<ns3::Socket> SwapApp::GetOrCreateUdpV6Connected(const ns3::Ipv6Address&
+ 
+ 
+ 
+-} // namespace q2ns
+\ No newline at end of file
++} // namespace q2ns
+diff --git a/model/q2ns-swap-app.h b/model/q2ns-swap-app.h
+index ab21f66..a320756 100644
+--- a/model/q2ns-swap-app.h
++++ b/model/q2ns-swap-app.h
+@@ -20,6 +20,7 @@
+ #include "ns3/traced-callback.h"
+ 
+ #include <cstdint>
++#include <functional>
+ #include <memory>
+ #include <string>
+ #include <unordered_map>
+@@ -97,6 +98,24 @@ public:
+   // Add one session (may be called multiple times before StartApplication or during sim setup)
+   void AddSession(const SessionConfig& cfg);
+ 
++  // External execution uses logical EPR identifiers without creating or copying quantum state.
++  // IDs are session-local; the external executor owns resource reservation and quantum state.
++  struct ExternalResources {
++    uint64_t pairPrev{0}, pairNext{0}, outputPair{0};
++  };
++  using ExternalBsmRequest = std::function<void(uint64_t, const ExternalResources&)>;
++  using ExternalCorrectionRequest = std::function<void(uint64_t, uint64_t, uint8_t, uint8_t)>;
++  using ExternalPacketObserver =
++      std::function<void(uint64_t, uint8_t, uint8_t, ns3::Ptr<ns3::Packet>)>;
++
++  // Optional asynchronous execution interface; the built-in quantum path remains available.
++  void SetExternalQuantumCallbacks(ExternalBsmRequest bsm, ExternalCorrectionRequest correction);
++  void SetExternalPacketObservers(ExternalPacketObserver tx, ExternalPacketObserver rx);
++  void AddExternalSession(const SessionConfig& cfg, const ExternalResources& resources);
++  bool RequestExternalBsm(uint64_t sid);
++  bool CompleteExternalBsm(uint64_t sid, uint8_t m1, uint8_t m2);
++  bool CompleteExternalCorrection(uint64_t sid);
++
+   // Traces (include sid to avoid per-session trace creation)
+   ns3::TracedCallback<uint64_t, ns3::Time> m_traceRoundStart; // repeater/endpoint sees its start
+   ns3::TracedCallback<uint64_t, ns3::Time, uint8_t, uint8_t> m_traceBSMDone;  // repeater BSM done
+@@ -123,9 +142,16 @@ private:
+     std::shared_ptr<Qubit> qPrev; // the qubit tied to the prev link at this repeater
+     std::shared_ptr<Qubit> qNext; // the qubit tied to the next link at this repeater
+     bool haveBSM{false};
++    bool external{false};
++    bool bsmPending{false}, correctionPending{false};
++    ExternalResources externalResources;
+   };
+ 
+   NetController* m_nc{nullptr};
++  bool m_started{false};
++  ExternalBsmRequest m_externalBsm;
++  ExternalCorrectionRequest m_externalCorrection;
++  ExternalPacketObserver m_externalTx, m_externalRx;
+ 
+   // All sessions on this node
+   std::unordered_map<uint64_t, SessionState> m_sessions; // keyed by sid
+@@ -148,6 +174,8 @@ private:
+ 
+   // Repeater BSM attempt
+   void MaybeDoBsmAndAnnounce(SessionState& s);
++  void AnnounceBsm(SessionState& s, uint8_t m1, uint8_t m2);
++  SessionState& ExternalSession(uint64_t sid, Role role);
+ 
+   void TryApply(SessionState& s);
+ 
+@@ -187,4 +215,4 @@ private:
+   ns3::Ptr<ns3::Socket> GetOrCreateTcpSender(const ns3::Address& dst, bool v6, uint16_t port);
+ };
+ 
+-} // namespace q2ns
+\ No newline at end of file
++} // namespace q2ns
+diff --git a/test/q2ns-swap-external-test-suite.cc b/test/q2ns-swap-external-test-suite.cc
+new file mode 100644
+index 0000000..ef8bfa5
+--- /dev/null
++++ b/test/q2ns-swap-external-test-suite.cc
+@@ -0,0 +1,219 @@
++// Test SwapApp asynchronous execution and the existing built-in quantum path.
++#include "ns3/q2ns-swap-app.h"
++#include "ns3/q2ns-netcontroller.h"
++#include "ns3/q2ns-qnode.h"
++#include "ns3/q2ns-qchannel.h"
++#include "ns3/q2ns-qstate-registry.h"
++#include "ns3/core-module.h"
++#include "ns3/internet-module.h"
++#include "ns3/point-to-point-module.h"
++#include "ns3/test.h"
++
++#include <stdexcept>
++
++using namespace ns3;
++using namespace q2ns;
++
++namespace {
++
++template<class F> bool Throws(F call) {
++  try { call(); } catch (const std::exception&) { return true; }
++  return false;
++}
++
++Ipv4Address Classical(Ptr<Node> r, Ptr<Node> b) {
++  PointToPointHelper link;
++  link.SetDeviceAttribute("DataRate", StringValue("100Mbps"));
++  link.SetChannelAttribute("Delay", TimeValue(NanoSeconds(10000)));
++  auto devices=link.Install(NodeContainer(r,b));
++  Ipv4AddressHelper address;
++  address.SetBase("10.78.0.0", "255.255.255.0");
++  return address.Assign(devices).GetAddress(1);
++}
++
++class ExternalContractCase : public TestCase {
++public:
++  ExternalContractCase() : TestCase("SwapApp external: actual UDP, async completion, duplicate guards, sole ownership") {}
++  void DoRun() override {
++    QStateRegistry registry;
++    auto r=CreateObject<QNode>(registry), b=CreateObject<QNode>(registry);
++    InternetStackHelper internet;
++    internet.SetIpv6StackInstall(false);
++    NodeContainer nodes; nodes.Add(r); nodes.Add(b);
++    internet.Install(nodes);
++    auto dst=Classical(r,b);
++    auto appR=CreateObject<SwapApp>(), appB=CreateObject<SwapApp>();
++    r->AddApplication(appR); b->AddApplication(appB);
++    appR->SetPayloadBytes(80);
++    appR->SetStartTime(NanoSeconds(0)); appB->SetStartTime(NanoSeconds(0));
++    int requests=0, sends=0, corrections=0, applied=0, received=0;
++    appR->SetExternalQuantumCallbacks([&](uint64_t sid,const SwapApp::ExternalResources& ids) {
++      ++requests;
++      NS_TEST_ASSERT_MSG_EQ(sid, 7, "session routing");
++      NS_TEST_ASSERT_MSG_EQ(ids.pairPrev, 101, "logical EPR mapping");
++      NS_TEST_ASSERT_MSG_EQ(Simulator::Now().GetNanoSeconds(), 1000, "request time");
++    }, {});
++    appB->SetExternalQuantumCallbacks({}, [&](uint64_t sid,uint64_t pair,uint8_t m1,uint8_t m2) {
++      ++corrections;
++      NS_TEST_ASSERT_MSG_EQ(pair,103,"correction target");
++      NS_TEST_ASSERT_MSG_EQ(m1,1,"wire Z bit"); NS_TEST_ASSERT_MSG_EQ(m2,0,"wire X bit");
++      NS_TEST_ASSERT_MSG_EQ(Simulator::Now().GetNanoSeconds(),23800,"actual UDP arrival");
++      Simulator::Schedule(NanoSeconds(7000), [&,sid] {
++        NS_TEST_ASSERT_MSG_EQ(appB->CompleteExternalCorrection(sid),true,"first completion");
++        NS_TEST_ASSERT_MSG_EQ(appB->CompleteExternalCorrection(sid),false,"duplicate completion");
++      });
++    });
++    appR->SetExternalPacketObservers([&](uint64_t,uint8_t,uint8_t,Ptr<Packet> p) {
++      ++sends;
++      NS_TEST_ASSERT_MSG_EQ(Simulator::Now().GetNanoSeconds(),5000,"no early result");
++      // A duplicate UDP result must not repeat frame resolution or correction.
++      auto socket=Socket::CreateSocket(r,UdpSocketFactory::GetTypeId());
++      Simulator::Schedule(NanoSeconds(10000), [socket,p,dst] {
++        socket->SendTo(p->Copy(),0,InetSocketAddress(dst,9000));
++        socket->Close();
++      });
++    }, {});
++    appB->SetExternalPacketObservers({}, [&](uint64_t,uint8_t,uint8_t,Ptr<Packet>){ ++received; });
++    appB->m_traceCorrectionApplied.ConnectWithoutContext(Callback<void,uint64_t,Time>(
++      [&](uint64_t,Time at) {
++        ++applied;
++        NS_TEST_ASSERT_MSG_EQ(at.GetNanoSeconds(),30800,"completion only after external ack");
++      }));
++    SwapApp::SessionConfig cfg;
++    cfg.sid=7; cfg.ctrlPort=9000; cfg.nextEndAddr=dst;
++    appR->AddExternalSession(cfg,{101,102,103});
++    NS_TEST_ASSERT_MSG_EQ(Throws([&]{appR->AddExternalSession(cfg,{101,102,103});}),true,"duplicate session");
++    cfg.role=SwapApp::Role::Next; cfg.applyCorrections=true;
++    appB->AddExternalSession(cfg,{101,102,103});
++    Simulator::Schedule(NanoSeconds(100), [&] {
++      NS_TEST_ASSERT_MSG_EQ(Throws([&]{appR->CompleteExternalBsm(7,1,0);}),true,"unsolicited BSM completion");
++      NS_TEST_ASSERT_MSG_EQ(Throws([&]{appB->CompleteExternalCorrection(7);}),true,"unsolicited correction completion");
++      NS_TEST_ASSERT_MSG_EQ(Throws([&]{appB->RequestExternalBsm(7);}),true,"wrong role");
++      NS_TEST_ASSERT_MSG_EQ(Throws([&]{appR->RequestExternalBsm(99);}),true,"unknown session");
++    });
++    Simulator::Schedule(NanoSeconds(1000), [&] {
++      NS_TEST_ASSERT_MSG_EQ(appR->RequestExternalBsm(7),true,"first request");
++      NS_TEST_ASSERT_MSG_EQ(appR->RequestExternalBsm(7),false,"duplicate pending request");
++    });
++    Simulator::Schedule(NanoSeconds(5000), [&] {
++      NS_TEST_ASSERT_MSG_EQ(Throws([&]{appR->CompleteExternalBsm(7,2,0);}),true,"invalid bit");
++      NS_TEST_ASSERT_MSG_EQ(appR->CompleteExternalBsm(7,1,0),true,"valid BSM completion");
++      NS_TEST_ASSERT_MSG_EQ(appR->CompleteExternalBsm(7,1,0),false,"duplicate BSM completion");
++      NS_TEST_ASSERT_MSG_EQ(Throws([&]{appR->CompleteExternalBsm(7,0,0);}),true,"conflicting completion");
++      NS_TEST_ASSERT_MSG_EQ(appR->RequestExternalBsm(7),false,"consumed session");
++    });
++    Simulator::Stop(MilliSeconds(1)); Simulator::Run();
++    NS_TEST_ASSERT_MSG_EQ(requests,1,"BSM exactly once"); NS_TEST_ASSERT_MSG_EQ(sends,1,"send exactly once");
++    NS_TEST_ASSERT_MSG_EQ(received,1,"duplicate result ignored");
++    NS_TEST_ASSERT_MSG_EQ(corrections,1,"correction exactly once"); NS_TEST_ASSERT_MSG_EQ(applied,1,"ack exactly once");
++    NS_TEST_ASSERT_MSG_EQ(registry.GetStatesSortedById().size(),0,"no duplicate Q2NS quantum states");
++    NS_TEST_ASSERT_MSG_EQ(r->GetLocalQubits().size()+b->GetLocalQubits().size(),0,"no native qubits");
++    appR->StopApplication();
++    NS_TEST_ASSERT_MSG_EQ(Throws([&]{appR->RequestExternalBsm(7);}),true,"stopped application");
++    Simulator::Destroy();
++  }
++};
++
++class StoppedEndpointCase : public TestCase {
++public:
++  StoppedEndpointCase() : TestCase("SwapApp external: late result after endpoint stop is ignored") {}
++  void DoRun() override {
++    QStateRegistry registry;
++    auto r=CreateObject<QNode>(registry), b=CreateObject<QNode>(registry);
++    NodeContainer nodes; nodes.Add(r); nodes.Add(b);
++    InternetStackHelper internet; internet.SetIpv6StackInstall(false); internet.Install(nodes);
++    auto dst=Classical(r,b);
++    auto appR=CreateObject<SwapApp>(), appB=CreateObject<SwapApp>();
++    r->AddApplication(appR); b->AddApplication(appB);
++    int received=0, corrections=0;
++    appR->SetExternalQuantumCallbacks([](uint64_t,const SwapApp::ExternalResources&){}, {});
++    appB->SetExternalQuantumCallbacks({}, [&](uint64_t,uint64_t,uint8_t,uint8_t){++corrections;});
++    appB->m_traceFrameResolved.ConnectWithoutContext(Callback<void,uint64_t,Time,uint8_t,uint8_t>(
++      [&](uint64_t,Time,uint8_t,uint8_t){++received;}));
++    SwapApp::SessionConfig cfg; cfg.sid=1; cfg.nextEndAddr=dst;
++    appR->AddExternalSession(cfg,{101,102,103});
++    cfg.role=SwapApp::Role::Next; cfg.applyCorrections=true;
++    appB->AddExternalSession(cfg,{101,102,103});
++    Simulator::Schedule(NanoSeconds(1000), [appR]{appR->RequestExternalBsm(1);});
++    Simulator::Schedule(NanoSeconds(2000), [appB]{appB->StopApplication();});
++    Simulator::Schedule(NanoSeconds(5000), [appR]{appR->CompleteExternalBsm(1,0,1);});
++    Simulator::Stop(MilliSeconds(1)); Simulator::Run();
++    NS_TEST_ASSERT_MSG_EQ(received,0,"stopped endpoint must not resolve a frame");
++    NS_TEST_ASSERT_MSG_EQ(corrections,0,"stopped endpoint must not request correction");
++    Simulator::Destroy();
++  }
++};
++
++class ExternalConfigCase : public TestCase {
++public:
++  ExternalConfigCase() : TestCase("SwapApp external: unsupported configurations rejected") {}
++  void DoRun() override {
++    auto node=CreateObject<Node>();
++    InternetStackHelper internet; internet.Install(node);
++    auto app=CreateObject<SwapApp>(); node->AddApplication(app);
++    app->SetExternalQuantumCallbacks([](uint64_t,const SwapApp::ExternalResources&){},{});
++    SwapApp::SessionConfig cfg; cfg.sid=1; cfg.nextEndAddr=Ipv4Address("10.78.0.2");
++    for (int defect=0;defect<8;++defect) {
++      auto c=cfg;
++      SwapApp::ExternalResources ids{101,102,103};
++      switch (defect) {
++      case 0: c.genNext=true; break;
++      case 1: c.verifyFidelity=true; break;
++      case 2: c.expectedMsgs=2; break;
++      case 3: c.proto="tcp"; break;
++      case 4: c.role=SwapApp::Role::Prev; break;
++      case 5: ids.pairNext=101; break;
++      case 6: ids.outputPair=0; break;
++      case 7: c.nextEndAddr=Ipv4Address::GetAny(); break;
++      }
++      NS_TEST_ASSERT_MSG_EQ(Throws([&]{app->AddExternalSession(c,ids);}),true,"unsupported configuration");
++    }
++    app->SetUseIpv6(true);
++    NS_TEST_ASSERT_MSG_EQ(Throws([&]{app->AddExternalSession(cfg,{101,102,103});}),true,"IPv6 scope");
++    Simulator::Destroy();
++  }
++};
++
++class NativeRegressionCase : public TestCase {
++public:
++  NativeRegressionCase() : TestCase("SwapApp native: built-in BSM and Pauli path still completes") {}
++  void DoRun() override {
++    NetController net;
++    auto a=net.CreateNode(), r=net.CreateNode(), b=net.CreateNode();
++    InternetStackHelper internet; internet.SetIpv6StackInstall(false);
++    NodeContainer nodes; nodes.Add(a); nodes.Add(r); nodes.Add(b);
++    internet.Install(nodes);
++    auto dst=Classical(r,b);
++    net.InstallQuantumLink(a,r)->SetAttribute("Delay",TimeValue(NanoSeconds(10)));
++    net.InstallQuantumLink(r,b)->SetAttribute("Delay",TimeValue(NanoSeconds(10)));
++    auto appA=CreateObject<SwapApp>(), appR=CreateObject<SwapApp>(), appB=CreateObject<SwapApp>();
++    a->AddApplication(appA); r->AddApplication(appR); b->AddApplication(appB);
++    int bsm=0, correction=0;
++    appR->m_traceBSMDone.ConnectWithoutContext(Callback<void,uint64_t,Time,uint8_t,uint8_t>(
++      [&](uint64_t,Time,uint8_t,uint8_t){++bsm;}));
++    appB->m_traceCorrectionApplied.ConnectWithoutContext(Callback<void,uint64_t,Time>(
++      [&](uint64_t,Time){++correction;}));
++    SwapApp::SessionConfig cfg; cfg.sid=1; cfg.start=NanoSeconds(1000); cfg.ctrlPort=9000;
++    cfg.role=SwapApp::Role::Prev; cfg.genNext=true; cfg.nextPeerId=r->GetId();
++    appA->AddSession(cfg);
++    cfg.role=SwapApp::Role::Repeater; cfg.nextPeerId=b->GetId(); cfg.nextEndAddr=dst;
++    appR->AddSession(cfg);
++    cfg.role=SwapApp::Role::Next; cfg.genNext=false; cfg.applyCorrections=true;
++    appB->AddSession(cfg);
++    Simulator::Stop(MilliSeconds(1)); Simulator::Run();
++    NS_TEST_ASSERT_MSG_EQ(bsm,1,"native BSM"); NS_TEST_ASSERT_MSG_EQ(correction,1,"native correction");
++    NS_TEST_ASSERT_MSG_EQ(net.GetRegistry().GetStatesSortedById().empty(),false,"native state ownership retained");
++    Simulator::Destroy();
++  }
++};
++
++class SwapExternalSuite : public TestSuite {
++public:
++  SwapExternalSuite() : TestSuite("q2ns-swap-external",Type::UNIT) {
++    AddTestCase(new ExternalContractCase,TestCase::Duration::QUICK);
++    AddTestCase(new StoppedEndpointCase,TestCase::Duration::QUICK);
++    AddTestCase(new ExternalConfigCase,TestCase::Duration::QUICK);
++    AddTestCase(new NativeRegressionCase,TestCase::Duration::QUICK);
++  }
++} g_swapExternalSuite;
++} // namespace

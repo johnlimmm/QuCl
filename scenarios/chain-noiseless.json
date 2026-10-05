@@ -1,0 +1,40 @@
+{
+  "name": "chain-noiseless",
+  "memory_noise": {
+    "model": "T1T2NoiseModel",
+    "T1_ns": 0,
+    "T2_ns": 0
+  },
+  "chains": [
+    {
+      "chain_id": 1,
+      "session_start_ns": 2000000,
+      "input_state": "0"
+    },
+    {
+      "chain_id": 2,
+      "session_start_ns": 2800000,
+      "input_state": "1"
+    },
+    {
+      "chain_id": 3,
+      "session_start_ns": 3600000,
+      "input_state": "+"
+    },
+    {
+      "chain_id": 4,
+      "session_start_ns": 4400000,
+      "input_state": "-"
+    },
+    {
+      "chain_id": 5,
+      "session_start_ns": 5200000,
+      "input_state": "+i"
+    },
+    {
+      "chain_id": 6,
+      "session_start_ns": 6000000,
+      "input_state": "-i"
+    }
+  ]
+}

@@ -1,0 +1,407 @@
+diff --git a/model/q2ns-teleportation-app.cc b/model/q2ns-teleportation-app.cc
+index fc7f058..c6fe38a 100644
+--- a/model/q2ns-teleportation-app.cc
++++ b/model/q2ns-teleportation-app.cc
+@@ -43,6 +43,7 @@
+ #include <limits>
+ #include <sstream>
+ #include <string>
++#include <stdexcept>
+ 
+ namespace q2ns {
+ 
+@@ -138,13 +139,81 @@ void TeleportationApp::SetNetController(NetController* nc) {
+ }
+ 
+ void TeleportationApp::SetTeleportState(const std::shared_ptr<QState>& st) {
++  if (m_external) throw std::logic_error("external teleport owns no native QState");
+   m_teleportState = st;
+ }
+ 
+ 
++// Optional external execution preserves the built-in path and two-byte measurement payload.
++void TeleportationApp::ConfigureExternal(const ExternalResources& resources,
++    ExternalBsmRequest bsm, ExternalCorrectionRequest correction) {
++  if (m_started || m_stopped || m_external || m_teleportState || !m_sessionId || m_ctrlProto != "udp" ||
++      !resources.input || !resources.epr || !resources.output ||
++      resources.input == resources.epr || resources.input == resources.output ||
++      resources.epr == resources.output ||
++      (m_role == "source" ? !bsm : (m_role != "sink" || !correction)))
++    throw std::invalid_argument("invalid external teleport configuration");
++  m_external = true;
++  m_resources = resources;
++  m_externalBsm = std::move(bsm);
++  m_externalCorrection = std::move(correction);
++}
++
++void TeleportationApp::SetExternalPacketObservers(ExternalPacketObserver tx, ExternalPacketObserver rx) {
++  if (m_started) throw std::logic_error("set observers before start");
++  m_externalTx = std::move(tx);
++  m_externalRx = std::move(rx);
++}
++
++bool TeleportationApp::NotifyExternalResourcesReady(uint64_t sid) {
++  if (!m_external || m_stopped || sid != m_sessionId || m_ready) return false;
++  m_ready = true;
++  if (m_role == "source") TryExternalBsm();
++  else if (m_sessionActive) TryApplyCorrection();
++  return true;
++}
++
++bool TeleportationApp::RequestExternalBsm(uint64_t sid) {
++  if (!m_external || !m_started || m_stopped || m_role != "source" ||
++      sid != m_sessionId || m_requested) return false;
++  m_requested = true;
++  TryExternalBsm();
++  return true;
++}
++
++void TeleportationApp::TryExternalBsm() {
++  if (!m_started || !m_sessionActive || m_stopped || !m_requested || !m_ready ||
++      m_bsmPending || m_bsmDone) return;
++  m_bsmPending = true;
++  m_externalBsm(m_sessionId, m_resources);
++}
++
++bool TeleportationApp::CompleteExternalBsm(uint64_t sid, uint8_t m1, uint8_t m2) {
++  if (!m_external || !m_started || m_stopped || m_role != "source" ||
++      sid != m_sessionId || !m_bsmPending || m_bsmDone || m1 > 1 || m2 > 1) return false;
++  m_bsmPending = false;
++  m_bsmDone = true;
++  m_traceSourceBellDone(sid, ns3::Simulator::Now());
++  SendCtrlBits(m1, m2);
++  return true;
++}
++
++bool TeleportationApp::CompleteExternalCorrection(uint64_t sid) {
++  if (!m_external || !m_started || m_stopped || m_role != "sink" ||
++      sid != m_sessionId || !m_correctionPending || m_done) return false;
++  m_correctionPending = false;
++  m_done = true;
++  m_traceSinkCorrection(sid, ns3::Simulator::Now());
++  return true;
++}
++
+ TeleportationApp::TeleportationApp() = default;
+ 
+ void TeleportationApp::StartApplication() {
++  if (m_external && (m_ctrlProto != "udp" || m_teleportState || m_stopped || !m_sessionId ||
++      (m_role == "source" ? !m_externalBsm : (m_role != "sink" || !m_externalCorrection))))
++    throw std::logic_error("invalid external teleport startup");
++  m_started = true;
+ 
+   // Ensure the transmitted qubit has a unique id (append once)
+   {
+@@ -157,6 +226,8 @@ void TeleportationApp::StartApplication() {
+ 
+   // Defer work to SessionStart to allow staggered starts via Attribute.
+   ns3::Simulator::Schedule(m_sessionStart, [this]() {
++    if (m_external && m_stopped) return;
++    m_sessionActive = true;
+     const auto now = ns3::Simulator::Now().GetSeconds();
+     NS_LOG_INFO("[" << now << "s] " << ns3::Names::FindName(GetNode()) << " TeleportationApp("
+                     << m_role << ") start");
+@@ -171,6 +242,17 @@ void TeleportationApp::StartApplication() {
+ }
+ 
+ void TeleportationApp::StopApplication() {
++  m_started = false;
++  m_stopped = true;
++  if (m_external && m_ctrlSink) {
++    // An Rx callback may stop the app; defer clearing the callback list while iterating it.
++    auto sink = m_ctrlSink;
++    auto callback = ns3::MakeCallback(&TeleportationApp::OnCtrlRx, this);
++    ns3::Simulator::ScheduleNow([sink, callback] {
++      sink->TraceDisconnectWithoutContext("Rx", callback);
++    });
++    m_ctrlSink->SetStopTime(ns3::Simulator::Now());
++  }
+   if (m_ctrlSender) {
+     m_ctrlSender = nullptr;
+   }
+@@ -183,6 +265,8 @@ void TeleportationApp::DoSourceStart() {
+ 
+   m_traceSourceStart(m_sessionId, ns3::Simulator::Now());
+ 
++  if (m_external) { TryExternalBsm(); return; }
++
+   auto qnode = ns3::DynamicCast<q2ns::QNode>(GetNode());
+   if (!qnode) {
+     NS_LOG_WARN("TeleportationApp(source): no QNode bound to this ns-3 node.");
+@@ -224,7 +308,7 @@ void TeleportationApp::DoSinkStart() {
+   m_traceSinkStart(m_sessionId, ns3::Simulator::Now());
+ 
+   auto qnode = ns3::DynamicCast<q2ns::QNode>(GetNode());
+-  qnode->SetRecvCallback(MakeCallback(&TeleportationApp::QubitArrivalHandler, this));
++  if (!m_external) qnode->SetRecvCallback(MakeCallback(&TeleportationApp::QubitArrivalHandler, this));
+ 
+   using namespace ns3;
+ 
+@@ -245,6 +329,7 @@ void TeleportationApp::DoSinkStart() {
+   } else {
+     NS_LOG_ERROR("Failed to install PacketSink for ctrl on port " << m_ctrlPort);
+   }
++  if (m_external) TryApplyCorrection();
+ }
+ 
+ void TeleportationApp::OnTcpConnectSuccess(ns3::Ptr<ns3::Socket> s) {
+@@ -271,6 +356,7 @@ void TeleportationApp::SendCtrlBits(uint8_t m1, uint8_t m2) {
+ 
+   uint8_t buf[2] = {m1, m2};
+   Ptr<Packet> pkt = Create<Packet>(buf, 2);
++  if (m_external && m_externalTx) m_externalTx(m_sessionId, m1, m2, pkt);
+ 
+   if (m_ctrlProto == "udp") {
+     Ptr<Socket> sock = Socket::CreateSocket(GetNode(), UdpSocketFactory::GetTypeId());
+@@ -316,6 +402,8 @@ void TeleportationApp::QubitArrivalHandler(std::shared_ptr<Qubit> q) {
+ void TeleportationApp::OnCtrlRx(ns3::Ptr<const ns3::Packet> pkt, const ns3::Address& /*from*/) {
+   using namespace ns3;
+ 
++  if (m_external && (!m_started || m_stopped || m_role != "sink" || m_haveCtrl || m_done)) return;
++
+   m_traceSinkCtrlArrive(m_sessionId, ns3::Simulator::Now());
+   NS_LOG_INFO("[" << ns3::Simulator::Now() << "s] " << ns3::Names::FindName(GetNode())
+                   << " TeleportationApp(sink): Received classical packet.");
+@@ -327,6 +415,8 @@ void TeleportationApp::OnCtrlRx(ns3::Ptr<const ns3::Packet> pkt, const ns3::Addr
+     return;
+   }
+   pkt->CopyData(bits, 2);
++  if (m_external && (pkt->GetSize() != 2 || bits[0] > 1 || bits[1] > 1)) return;
++  if (m_external && m_externalRx) m_externalRx(m_sessionId, bits[0], bits[1], pkt->Copy());
+   m_m1 = bits[0];
+   m_m2 = bits[1];
+   m_haveCtrl = true;
+@@ -336,6 +426,13 @@ void TeleportationApp::OnCtrlRx(ns3::Ptr<const ns3::Packet> pkt, const ns3::Addr
+ }
+ 
+ void TeleportationApp::TryApplyCorrection() {
++  if (m_external) {
++    if (!m_started || m_stopped || !m_sessionActive || !m_ready || !m_haveCtrl ||
++        m_correctionPending || m_done) return;
++    m_correctionPending = true;
++    m_externalCorrection(m_sessionId, m_resources.output, m_m1, m_m2);
++    return;
++  }
+   if (!(m_haveCtrl && m_haveQ))
+     return;
+ 
+@@ -356,4 +453,4 @@ void TeleportationApp::TryApplyCorrection() {
+ }
+ 
+ 
+-} // namespace q2ns
+\ No newline at end of file
++} // namespace q2ns
+diff --git a/model/q2ns-teleportation-app.h b/model/q2ns-teleportation-app.h
+index 7c493a0..df254b7 100644
+--- a/model/q2ns-teleportation-app.h
++++ b/model/q2ns-teleportation-app.h
+@@ -20,6 +20,8 @@
+ #include "ns3/traced-callback.h"
+ 
+ #include <cstdint>
++#include <functional>
++#include <memory>
+ #include <string>
+ 
+ namespace ns3 {
+@@ -54,6 +56,19 @@ public:
+   // User must set the state to be teleported
+   void SetTeleportState(const std::shared_ptr<QState>& state);
+ 
++  // External mode stores logical handles only; NetSquid owns the qubits and quantum state.
++  struct ExternalResources { uint64_t input{}, epr{}, output{}; };
++  using ExternalBsmRequest = std::function<void(uint64_t, const ExternalResources&)>;
++  using ExternalCorrectionRequest = std::function<void(uint64_t, uint64_t, uint8_t, uint8_t)>;
++  using ExternalPacketObserver =
++      std::function<void(uint64_t, uint8_t, uint8_t, ns3::Ptr<ns3::Packet>)>;
++  void ConfigureExternal(const ExternalResources&, ExternalBsmRequest, ExternalCorrectionRequest);
++  void SetExternalPacketObservers(ExternalPacketObserver tx, ExternalPacketObserver rx);
++  bool NotifyExternalResourcesReady(uint64_t sid);
++  bool RequestExternalBsm(uint64_t sid);
++  bool CompleteExternalBsm(uint64_t sid, uint8_t m1, uint8_t m2);
++  bool CompleteExternalCorrection(uint64_t sid);
++
+   // TraceSources
+   // Source-side (Alice) local events
+   ns3::TracedCallback<uint64_t, ns3::Time> m_traceSourceStart;    // when Alice starts session
+@@ -67,6 +82,15 @@ public:
+   ns3::TracedCallback<uint64_t, ns3::Time> m_traceSinkCorrection; // correction completed
+ 
+ private:
++  // Resource readiness and control arrival are independent; complete each request only once.
++  bool m_external{false}, m_started{false}, m_stopped{false}, m_ready{false};
++  bool m_requested{false}, m_bsmPending{false}, m_bsmDone{false};
++  bool m_correctionPending{false}, m_done{false}, m_sessionActive{false};
++  ExternalResources m_resources;
++  ExternalBsmRequest m_externalBsm;
++  ExternalCorrectionRequest m_externalCorrection;
++  ExternalPacketObserver m_externalTx, m_externalRx;
++  void TryExternalBsm();
+   std::string m_role; // "source" | "sink"
+   ns3::Ptr<q2ns::QNode> m_peerQNode;
+   std::shared_ptr<QState> m_teleportState;
+diff --git a/test/q2ns-teleport-external-test-suite.cc b/test/q2ns-teleport-external-test-suite.cc
+new file mode 100644
+index 0000000..b48b047
+--- /dev/null
++++ b/test/q2ns-teleport-external-test-suite.cc
+@@ -0,0 +1,158 @@
++// Test TeleportationApp readiness, asynchronous completion, and UDP contracts; Python tests validate quantum states.
++#include "ns3/q2ns-teleportation-app.h"
++#include "ns3/q2ns-qnode.h"
++#include "ns3/q2ns-qstate-registry.h"
++#include "ns3/q2ns-netcontroller.h"
++#include "ns3/q2ns-qchannel.h"
++#include "ns3/q2ns-qstate-ket.h"
++#include "ns3/core-module.h"
++#include "ns3/internet-module.h"
++#include "ns3/point-to-point-module.h"
++#include "ns3/test.h"
++#include <stdexcept>
++using namespace ns3;
++using namespace q2ns;
++namespace {
++Ipv4Address Connect(Ptr<Node> a,Ptr<Node> b) {
++  InternetStackHelper internet;internet.SetIpv6StackInstall(false);internet.Install(NodeContainer(a,b));
++  PointToPointHelper link;link.SetDeviceAttribute("DataRate",StringValue("100Mbps"));
++  link.SetChannelAttribute("Delay",TimeValue(NanoSeconds(10000)));
++  Ipv4AddressHelper addr;addr.SetBase("10.79.0.0","255.255.255.0");
++  return addr.Assign(link.Install(NodeContainer(a,b))).GetAddress(1);
++}
++void Setup(Ptr<TeleportationApp> a,Ptr<TeleportationApp> b,Ptr<Node> na,Ptr<Node> nb,Ipv4Address dst) {
++  na->AddApplication(a);nb->AddApplication(b);
++  for (auto app:{a,b}) {
++    app->SetAttribute("Role",StringValue(app==a?"source":"sink"));
++    app->SetAttribute("SessionId",UintegerValue(7));
++    app->SetAttribute("Peer",Ipv4AddressValue(dst));
++    app->SetAttribute("CtrlPort",UintegerValue(7000));
++    app->SetStartTime(NanoSeconds(0));
++  }
++}
++class ContractCase:public TestCase {
++  int m_mode;
++public:
++  ContractCase(int mode):TestCase(mode==0?"teleport external: actual UDP, duplicates, invalid bits, readiness first":
++    mode==1?"teleport external: control arrives before Bob resource ready":
++    mode==2?"teleport external: stop rejects late BSM completion":
++    mode==3?"teleport external: stop rejects late correction completion":
++            "teleport external: stop ignores late result packet"),m_mode(mode){}
++  void DoRun() override {
++    QStateRegistry registry;
++    auto na=CreateObject<QNode>(registry),nb=CreateObject<QNode>(registry);
++    auto dst=Connect(na,nb);
++    auto a=CreateObject<TeleportationApp>(),b=CreateObject<TeleportationApp>();
++    Setup(a,b,na,nb,dst);
++    int requests=0,corrections=0,applied=0,received=0;
++    a->ConfigureExternal({201,202,203},[&](uint64_t sid,const TeleportationApp::ExternalResources& r) {
++      ++requests;NS_TEST_ASSERT_MSG_EQ(sid,7,"session");NS_TEST_ASSERT_MSG_EQ(r.input,201,"input handle");
++      NS_TEST_ASSERT_MSG_EQ(Simulator::Now().GetNanoSeconds(),2000,"request waits for source resources");
++    },{});
++    b->ConfigureExternal({201,202,203},{},[&](uint64_t sid,uint64_t target,uint8_t m1,uint8_t m2) {
++      ++corrections;
++      NS_TEST_ASSERT_MSG_EQ(target,203,"target handle");
++      NS_TEST_ASSERT_MSG_EQ(m1,1,"Z bit");NS_TEST_ASSERT_MSG_EQ(m2,1,"X bit");
++      NS_TEST_ASSERT_MSG_EQ(Simulator::Now().GetNanoSeconds(),m_mode==1?25000:17560,"ready and actual packet RX");
++      if(m_mode==3)b->StopApplication();
++      Simulator::Schedule(NanoSeconds(7000),[&,sid] {
++        NS_TEST_ASSERT_MSG_EQ(b->CompleteExternalCorrection(sid),m_mode!=3,"async completion guard");
++        NS_TEST_ASSERT_MSG_EQ(b->CompleteExternalCorrection(sid),false,"duplicate completion");
++      });
++    });
++    a->SetExternalPacketObservers([&](uint64_t,uint8_t,uint8_t,Ptr<Packet> p) {
++      NS_TEST_ASSERT_MSG_EQ(p->GetSize(),2,"original native payload retained");
++      auto socket=Socket::CreateSocket(na,UdpSocketFactory::GetTypeId());
++      Simulator::Schedule(NanoSeconds(10000),[socket,p,dst] {
++        socket->SendTo(p->Copy(),0,InetSocketAddress(dst,7000));socket->Close();
++      });
++    },{});
++    b->SetExternalPacketObservers({},[&](uint64_t,uint8_t,uint8_t,Ptr<Packet>){++received;});
++    b->m_traceSinkCorrection.ConnectWithoutContext(Callback<void,uint64_t,Time>([&](uint64_t,Time){++applied;}));
++    if(m_mode!=1)NS_TEST_ASSERT_MSG_EQ(b->NotifyExternalResourcesReady(7),true,"early ready");
++    Simulator::Schedule(NanoSeconds(1000),[&] {
++      NS_TEST_ASSERT_MSG_EQ(a->CompleteExternalBsm(7,0,0),false,"unsolicited completion");
++      NS_TEST_ASSERT_MSG_EQ(b->CompleteExternalCorrection(7),false,"premature correction");
++      NS_TEST_ASSERT_MSG_EQ(a->RequestExternalBsm(99),false,"unknown session");
++      NS_TEST_ASSERT_MSG_EQ(b->RequestExternalBsm(7),false,"wrong role");
++      NS_TEST_ASSERT_MSG_EQ(a->RequestExternalBsm(7),true,"first request");
++      NS_TEST_ASSERT_MSG_EQ(requests,0,"not ready");
++      NS_TEST_ASSERT_MSG_EQ(a->RequestExternalBsm(7),false,"duplicate request");
++    });
++    Simulator::Schedule(NanoSeconds(2000),[&] {
++      NS_TEST_ASSERT_MSG_EQ(a->NotifyExternalResourcesReady(99),false,"wrong ready session");
++      NS_TEST_ASSERT_MSG_EQ(a->NotifyExternalResourcesReady(7),true,"ready");
++      NS_TEST_ASSERT_MSG_EQ(a->NotifyExternalResourcesReady(7),false,"duplicate ready");
++    });
++    if(m_mode==2)Simulator::Schedule(NanoSeconds(4000),[a]{a->StopApplication();});
++    if(m_mode==4)Simulator::Schedule(NanoSeconds(4000),[b]{b->StopApplication();});
++    Simulator::Schedule(NanoSeconds(5000),[&] {
++      NS_TEST_ASSERT_MSG_EQ(a->CompleteExternalBsm(7,2,0),false,"invalid measurement bit");
++      NS_TEST_ASSERT_MSG_EQ(a->CompleteExternalBsm(7,1,1),m_mode!=2,"BSM completion");
++      NS_TEST_ASSERT_MSG_EQ(a->CompleteExternalBsm(7,1,1),false,"duplicate BSM completion");
++    });
++    if(m_mode==1)Simulator::Schedule(NanoSeconds(25000),[&] {
++      NS_TEST_ASSERT_MSG_EQ(received,1,"bits arrived before ready");
++      NS_TEST_ASSERT_MSG_EQ(corrections,0,"correction still waits");
++      NS_TEST_ASSERT_MSG_EQ(b->NotifyExternalResourcesReady(7),true,"late resource ready");
++    });
++    Simulator::Stop(MilliSeconds(1));Simulator::Run();
++    NS_TEST_ASSERT_MSG_EQ(requests,1,"BSM once");
++    NS_TEST_ASSERT_MSG_EQ(corrections,(m_mode==2||m_mode==4)?0:1,"correction once");
++    NS_TEST_ASSERT_MSG_EQ(applied,(m_mode>=2)?0:1,"completion once");
++    NS_TEST_ASSERT_MSG_EQ(received,(m_mode==2||m_mode==4)?0:1,"duplicate ignored");
++    NS_TEST_ASSERT_MSG_EQ(registry.GetStatesSortedById().size(),0,"no native quantum states");
++    NS_TEST_ASSERT_MSG_EQ(na->GetLocalQubits().size()+nb->GetLocalQubits().size(),0,"no native qubits");
++    Simulator::Destroy();
++  }
++};
++class ConfigCase:public TestCase {
++public:
++  ConfigCase():TestCase("teleport external: invalid configuration rejected"){}
++  void DoRun() override {
++    for(int mode=0;mode<5;++mode) {
++      auto a=CreateObject<TeleportationApp>();a->SetAttribute("SessionId",UintegerValue(7));TeleportationApp::ExternalResources ids{201,202,203};
++      if(mode==0)ids.input=0;
++      if(mode==1)ids.epr=201;
++      if(mode==2)a->SetAttribute("ClassicalProtocol",StringValue("tcp"));
++      if(mode==3)a->SetAttribute("Role",StringValue("bad"));
++      bool caught=false;
++      try {a->ConfigureExternal(ids,mode==4?TeleportationApp::ExternalBsmRequest{}:
++        [](uint64_t,const TeleportationApp::ExternalResources&){},{});}catch(const std::exception&){caught=true;}
++      NS_TEST_ASSERT_MSG_EQ(caught,true,"unsupported external config");
++    }
++    Simulator::Destroy();
++  }
++};
++class NativeCase:public TestCase {
++public:
++  NativeCase():TestCase("teleport native: built-in preparation, quantum send, BSM and correction retained"){}
++  void DoRun() override {
++    NetController net;
++    auto na=net.CreateNode(),nb=net.CreateNode();
++    auto dst=Connect(na,nb);
++    net.InstallQuantumLink(na,nb)->SetAttribute("Delay",TimeValue(NanoSeconds(10)));
++    auto a=CreateObject<TeleportationApp>(),b=CreateObject<TeleportationApp>();
++    Setup(a,b,na,nb,dst);
++    a->SetAttribute("PeerQNode",PointerValue(nb));
++    a->SetTeleportState(std::make_shared<QStateKet>(1));
++    int bsm=0,corrected=0;
++    a->m_traceSourceBellDone.ConnectWithoutContext(Callback<void,uint64_t,Time>([&](uint64_t,Time){++bsm;}));
++    b->m_traceSinkCorrection.ConnectWithoutContext(Callback<void,uint64_t,Time>([&](uint64_t,Time){++corrected;}));
++    Simulator::Stop(MilliSeconds(1));Simulator::Run();
++    NS_TEST_ASSERT_MSG_EQ(bsm,1,"native BSM");
++    NS_TEST_ASSERT_MSG_EQ(corrected,1,"native correction");
++    NS_TEST_ASSERT_MSG_EQ(net.GetRegistry().GetStatesSortedById().empty(),false,"native state retained");
++    NS_TEST_ASSERT_MSG_EQ(nb->GetLocalQubits().size(),1,"native receiver qubit");
++    Simulator::Destroy();
++  }
++};
++class ExternalSuite:public TestSuite {
++public:
++  ExternalSuite():TestSuite("q2ns-teleport-external",Type::UNIT) {
++    for(int mode=0;mode<5;++mode)AddTestCase(new ContractCase(mode),TestCase::Duration::QUICK);
++    AddTestCase(new ConfigCase,TestCase::Duration::QUICK);
++    AddTestCase(new NativeCase,TestCase::Duration::QUICK);
++  }
++} g_externalSuite;
++}

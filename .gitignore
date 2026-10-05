@@ -1,0 +1,29 @@
+# Local runs, build products and environments
+/results/
+/output/
+/build/
+/cmake-cache/
+/.venv/
+/venv/
+__pycache__/
+*.py[cod]
+*.so
+*.o
+*.log
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.vscode/
+.idea/
+.DS_Store
+# Manuscripts, archived campaigns and generated binary artifacts
+/paper/
+/baselines/
+/archives/
+*.tex
+*.bib
+*.pdf
+*.zip
+*.tar
+*.tar.gz
+*.json.gz

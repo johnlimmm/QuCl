@@ -1,0 +1,10 @@
+{
+  "name": "chain",
+  "chains": [
+    {
+      "chain_id": 1,
+      "session_start_ns": 2000000,
+      "input_state": "+i"
+    }
+  ]
+}

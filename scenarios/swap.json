@@ -1,0 +1,10 @@
+{
+  "name": "swap",
+  "sessions": [
+    {
+      "session_id": 1,
+      "protocol": "swap",
+      "session_start_ns": 2000000
+    }
+  ]
+}
