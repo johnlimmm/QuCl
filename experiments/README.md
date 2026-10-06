@@ -1,8 +1,14 @@
 # Execution-coupling experiments
 
-Start with [the reproduction guide](../docs/REPRODUCING.md). It covers installation,
+Start with [the complete-workflow guide](../docs/CHAIN-EVALUATION.md). It covers installation,
 the physical profile and its sources, full and quick runs, three comparison models,
 statistical aggregation and figure generation.
+
+- [chain-profile.json](chain-profile.json): current complete-workflow settings.
+- [run_chain_evaluation.py](run_chain_evaluation.py): all models through final teleportation.
+- [render_chain_evaluation.py](render_chain_evaluation.py): Figures 3, 4, 5(a), 5(b).
+
+The earlier swapping-stage comparison remains available:
 
 - [profile.json](profile.json): complete experiment configuration.
 - [run_evaluation.py](run_evaluation.py): native simulation, calibration and validation.

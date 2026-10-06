@@ -6,33 +6,52 @@ from chained_validation import require
 from reference_client import reference as run_reference
 
 
-def cross_validate_chained(report, enumerate_branches=False):
+def chained_reference_spec(report, chain, enumerate_branches):
+    """Complete identity of a deterministic independent reference calculation."""
     c = report["config"]
     req = {(r["session_id"], r["operation"]): r for r in report["snapshot"]["requests"]}
+    ids = [chain["swap_session_id"], chain["teleport_session_id"]]
+    stages = [report["snapshot"]["sessions"][str(s)] for s in ids]
+    return dict(
+        input_state=chain["input_state"],
+        quantum_links=c["quantum_links"],
+        memory_noise=c["memory_noise"],
+        gate_depolar_probability=c["gate_depolar_probability"],
+        native_instructions=c["native_instructions"],
+        bits=[s["measurement_bits"] for s in stages],
+        stages=[
+            {
+                op.lower(): {
+                    k: req[s, op][k] for k in ("arrival_ns", "start_ns", "completion_ns")
+                }
+                for op in ("BSM", "CORRECTION")
+            }
+            for s in ids
+        ],
+        enumerate_branches=enumerate_branches,
+    )
+
+
+def cross_validate_chained(report, enumerate_branches=False, references=None):
+    c = report["config"]
     results = {}
     maximum = 0.0
     for chain in c["chains"]:
         ids = [chain["swap_session_id"], chain["teleport_session_id"]]
         stages = [report["snapshot"]["sessions"][str(s)] for s in ids]
-        spec = dict(
-            input_state=chain["input_state"],
-            quantum_links=c["quantum_links"],
-            memory_noise=c["memory_noise"],
-            gate_depolar_probability=c["gate_depolar_probability"],
-            native_instructions=c["native_instructions"],
-            bits=[s["measurement_bits"] for s in stages],
-            stages=[
-                {
-                    op.lower(): {
-                        k: req[s, op][k] for k in ("arrival_ns", "start_ns", "completion_ns")
-                    }
-                    for op in ("BSM", "CORRECTION")
-                }
-                for s in ids
-            ],
-            enumerate_branches=enumerate_branches,
-        )
-        ref = run_reference("chained", spec)
+        spec = chained_reference_spec(report, chain, enumerate_branches)
+        # An evaluation may reuse an independent reference only for an identical
+        # complete specification, including input, noise, all times and outcomes.
+        # The coupled native execution and every checkpoint comparison still run.
+        key = json.dumps(spec, sort_keys=True)
+        if references is not None and key in references:
+            ref = references[key]
+            if hasattr(references, "move_to_end"):
+                references.move_to_end(key)
+        else:
+            ref = run_reference("chained", spec)
+            if references is not None:
+                references[key] = ref
         errors = {}
 
         def compare(label, left, right):
@@ -53,7 +72,8 @@ def cross_validate_chained(report, enumerate_branches=False):
             require(error < 1e-10, "reference state mismatch " + label + " " + str(error))
             if "fidelity" in left and "fidelity" in right:
                 require(
-                    abs(left["fidelity"] - right["fidelity"]) < 1e-10, "reference fidelity " + label
+                    abs(left["fidelity"] - right["fidelity"]) < 1e-10,
+                    "reference fidelity " + label,
                 )
 
         observed = ref["observed"]
@@ -64,7 +84,9 @@ def cross_validate_chained(report, enumerate_branches=False):
             for name in ("bsm_start", "frame", "packet_arrival", "correction_start", "usable"):
                 if name == "bsm_start":
                     for part, state in stage["checkpoints"][name].items():
-                        compare(str(i) + name + part, state, expected["checkpoints"][name][part])
+                        compare(
+                            str(i) + name + part, state, expected["checkpoints"][name][part]
+                        )
                 else:
                     compare(
                         str(i) + name, stage["checkpoints"][name], expected["checkpoints"][name]
@@ -77,7 +99,13 @@ def cross_validate_chained(report, enumerate_branches=False):
                 require(
                     all(
                         n[k] == r[k]
-                        for k in ("operation", "index", "instruction", "start_ns", "completion_ns")
+                        for k in (
+                            "operation",
+                            "index",
+                            "instruction",
+                            "start_ns",
+                            "completion_ns",
+                        )
                     ),
                     "reference gate timing",
                 )
@@ -101,7 +129,9 @@ def cross_validate_provisioned(report, references=None):
     results = {}
     for sid, session in report["snapshot"]["sessions"].items():
         requests = {
-            r["operation"]: r for r in report["snapshot"]["requests"] if str(r["session_id"]) == sid
+            r["operation"]: r
+            for r in report["snapshot"]["requests"]
+            if str(r["session_id"]) == sid
         }
         spec = dict(
             gate_depolar_probability=report["config"]["gate_depolar_probability"],
@@ -169,7 +199,9 @@ def cross_validate_provisioned(report, references=None):
             if "fidelity" in a:
                 error = abs(a["fidelity"] - b["fidelity"])
                 ferrors[label] = error
-                require(np.isfinite(error) and error <= 1e-12, "native reference fidelity " + label)
+                require(
+                    np.isfinite(error) and error <= 1e-12, "native reference fidelity " + label
+                )
 
         cp = session["checkpoints"]
         reference = branch["checkpoints"]

@@ -74,7 +74,7 @@ from the live NetSquid state with `qubitapi.fidelity(..., squared=True)`.
    competing workflows and a small configurable delay sweep.
 3. Read [Configuration](docs/CONFIGURATION.md) and
    [Architecture](docs/ARCHITECTURE.md) before extending the model.
-4. Follow [Reproducing the experiments](docs/REPRODUCING.md) for the literature-based
+4. Follow [Complete-workflow experiments](docs/CHAIN-EVALUATION.md) for the literature-based
    profile, six-input workload, paired model comparisons, statistics and Figures 3–5.
 
 Once installed, run from the ns-3 root:
@@ -110,31 +110,32 @@ Both runners check event causality, resource ownership, native instruction
 timing and classical packet timing. Independent NetSquid-only circuits validate
 quantum states at matching operation times. The test suite also covers all six
 input states, measurement branches, FIFO contention and rejected invalid runs.
-The current release check passed **52 Python tests and 83 Q2NS native test cases**
+The current release check passed **70 Python tests and 83 Q2NS native test cases**
 (across eight native suites) in a separate ns-3.47 build. This includes the original
-37 Python tests and 15 evaluation tests for model equivalence, relaxed capacity,
+37 Python tests, 15 swapping-evaluation tests and 18 complete-chain evaluation
+tests for model equivalence, final-state errors, downstream contention,
 traffic-phase statistics and independent worker execution. Campaign execution
 counts are separate from test counts.
 See [testing instructions](docs/EXAMPLES.md#run-tests).
 
 ## Reproduce the comparison campaign
 
-The [experiment profile](experiments/profile.json) defines a 27.405 μs native BSM,
+The [experiment profile](experiments/chain-profile.json) defines a 27.405 μs native BSM,
 100 Mb/s classical links, three workflow-start intervals and four background
 loads. These explicitly override the illustrative example defaults.
 
 ```bash
-"$QUCL_PYTHON" contrib/cosim/experiments/run_evaluation.py \
-  contrib/cosim/experiments/profile.json --workers 4 \
+"$QUCL_PYTHON" contrib/cosim/experiments/run_chain_evaluation.py \
+  contrib/cosim/experiments/chain-profile.json --workers 1 \
   --output-dir results/qucl-evaluation
 ```
 
 This evaluates complete Swap → Teleport chains for six input states and compares
-Full Sync with No R contention, Fixed classical delay and Decoupled timing for
-the swapping stage. It records sampled native fidelity separately from the exact
+Full Sync with No R contention, Fixed classical delay and Decoupled timing over
+the entire workflow, including final Bob output. It records sampled native fidelity separately from the exact
 branch-weighted expectation. A separate renderer verifies the reports and produces
 Figures 3–5 with traffic-phase bootstrap intervals. See the
-[reproduction guide](docs/REPRODUCING.md) for plotting dependencies, commands,
+[reproduction guide](docs/CHAIN-EVALUATION.md) for plotting dependencies, commands,
 parameter sources and interpretation. Manuscripts and generated datasets are not bundled.
 
 ## Scope

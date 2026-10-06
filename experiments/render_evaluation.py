@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check completed reports, aggregate traffic phases and render three figures.
+"""Check completed reports and render Figures 3, 4, 5(a) and 5(b).
 
 This postprocessing program requires NumPy and Matplotlib, not NetSquid.
 It never changes simulation reports and writes only to a new output directory.
@@ -73,14 +73,16 @@ def legend(fig, ax):
     fig.legend(
         handles,
         labels,
-        loc="upper center",
-        bbox_to_anchor=(0.56, 0.99),
-        ncol=3,
-        fontsize=10,
-        handlelength=1.7,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 1.025),
+        bbox_transform=ax.transAxes,
+        borderaxespad=0,
+        ncol=min(3, len(labels)),
+        fontsize=9.5,
+        handlelength=1.5,
         handleheight=1.15,
-        columnspacing=1.2,
-        handletextpad=0.6,
+        columnspacing=1.0,
+        handletextpad=0.5,
     )
 
 
@@ -91,14 +93,14 @@ def save_figure(fig, out, name, book):
     plt.close(fig)
 
 
-def bars(series, ylabel, loads, out, name, book):
+def bars(series, ylabel, loads, out, name, book, tick_format=None):
     fig, ax = figure_axes()
     positions = np.arange(len(loads)) * 1.15
     width = 0.245
     upper = max(v[2] if v[2] is not None else v[0] for _, values in series for v in values)
     height = upper * 1.13 if upper else 1
     for i, (label, values) in enumerate(series):
-        x = positions + (i - 1) * width
+        x = positions + (i - (len(series) - 1) / 2) * width
         ys = [v[0] for v in values]
         ax.bar(
             x,
@@ -134,7 +136,9 @@ def bars(series, ylabel, loads, out, name, book):
                 )
     ax.set_ylim(0, height)
     ax.set_xticks(positions, [f"{l:.2f}" for l in loads])
-    ax.yaxis.set_major_locator(MaxNLocator(nbins=5, integer=True))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+    if tick_format is not None:
+        ax.yaxis.set_major_formatter(FormatStrFormatter(tick_format))
     ax.set_ylabel(ylabel, labelpad=8)
     legend(fig, ax)
     save_figure(fig, out, name, book)
@@ -161,30 +165,42 @@ def plots(s, cells, out):
                     )
                 )
             series.append((f"{ratio:g}× interval", values))
-        bars(series, "Extra latency (μs)", loads, out, "fig3_chain_latency", book)
+        bars(series, "Additional latency (μs)", loads, out, "fig3_chain_latency", book)
         fidelity_plot(s, cells, out, book)
-        series = []
-        for model, label in zip(MODELS, LABELS):
-            values = []
-            for load in loads:
-                g = next(
-                    g
-                    for g in s["ablation_groups"]
-                    if g["classical_load"] == load
-                    and g["request_interval_ns"] == p["request_intervals_ns"][0]
-                    and g["model"] == model
-                )
-                e = g["latency_mae_ns"]
-                lo, hi = e["ci95_cluster_bootstrap"] or [None, None]
-                values.append(
-                    (
-                        e["mean"] / 1000,
-                        None if lo is None else lo / 1000,
-                        None if hi is None else hi / 1000,
+        for metric, scale, models, labels, ylabel, name, tick_format in (
+            ("latency_mae_ns", 1000, MODELS, LABELS, "Latency MAE (μs)", "fig5_a", None),
+            (
+                "expected_fidelity_mae",
+                1,
+                MODELS[:2],
+                LABELS[:2],
+                "Fidelity MAE",
+                "fig5_b",
+                "%.3f",
+            ),
+        ):
+            series = []
+            for model, label in zip(models, labels):
+                values = []
+                for load in loads:
+                    g = next(
+                        g
+                        for g in s["ablation_groups"]
+                        if g["classical_load"] == load
+                        and g["request_interval_ns"] == p["request_intervals_ns"][0]
+                        and g["model"] == model
                     )
-                )
-            series.append((label, values))
-        bars(series, "Latency error (μs)", loads, out, "fig5_model_error", book)
+                    e = g[metric]
+                    lo, hi = e["ci95_cluster_bootstrap"] or [None, None]
+                    values.append(
+                        (
+                            e["mean"] / scale,
+                            None if lo is None else lo / scale,
+                            None if hi is None else hi / scale,
+                        )
+                    )
+                series.append((label, values))
+            bars(series, ylabel, loads, out, name, book, tick_format)
 
 
 def interval_text(e, scale=1, digits=2):
@@ -203,7 +219,9 @@ def fidelity_plot(s, cells, out, book):
     loads = p["classical_loads"]
     fig, ax = figure_axes()
     bounds = []
-    for i, (interval, ratio) in enumerate(zip(p["request_intervals_ns"], p["interval_factors"])):
+    for i, (interval, ratio) in enumerate(
+        zip(p["request_intervals_ns"], p["interval_factors"])
+    ):
         own = [
             next(c for c in cells if c["load"] == load and c["interval_ns"] == interval)
             for load in loads
@@ -309,7 +327,8 @@ def audit(source):
                 branches = list(reference["branches"].values())
                 require(len(branches) == 16, "missing branches")
                 require(
-                    abs(sum(b["probability"] for b in branches) - 1) < 1e-12, "branch probability"
+                    abs(sum(b["probability"] for b in branches) - 1) < 1e-12,
+                    "branch probability",
                 )
                 # Both the stored branch fidelity and sampled output are produced
                 # by NetSquid's fidelity(..., squared=True), not a decay formula.
@@ -341,7 +360,8 @@ def audit(source):
         require(metric["latency_ns"] == row["latency_ns"], "CSV latency differs from trace")
         require(all(metric["delays"][k] == row[k] for k in DELAY_FIELDS), "CSV decomposition")
         require(
-            abs(metric["output_fidelity"] - row["observed_fidelity"]) < 1e-12, "sampled fidelity"
+            abs(metric["output_fidelity"] - row["observed_fidelity"]) < 1e-12,
+            "sampled fidelity",
         )
         require(abs(fidelity - row["expected_fidelity"]) < 1e-12, "CSV expected fidelity")
     cells = chain_cells(rows, plan)
@@ -360,7 +380,10 @@ def audit(source):
         for model in MODELS:
             errors.extend(
                 compare(
-                    full, case["models"][model], dict(metadata, model=model), plan["deadline_ns"]
+                    full,
+                    case["models"][model],
+                    dict(metadata, model=model),
+                    plan["deadline_ns"],
                 )
             )
         for a, b, c in zip(full, case["models"]["No-Dq-R"], case["models"]["Decoupled"]):
@@ -417,11 +440,52 @@ def render(source, output):
         "Zero load is deterministic. Six input states and sessions are averaged within each phase.",
         "Calibration uncertainty is not included. These are finite batches with periodic traffic.",
         "",
-        "Figure 3: extra latency relative to the longest-interval zero-load condition.",
+        "Figure 3: additional latency relative to the longest-interval zero-load condition.",
         "Figure 4: absolute branch-weighted final teleportation fidelity; the vertical axis is expanded.",
-        "Figure 5: swapping-stage latency MAE against Full Sync at the shortest start interval.",
+        "Figure 5(a): swapping-stage latency MAE against Full Sync at the shortest start interval.",
+        "Figure 5(b): swapping-stage Bell-pair fidelity MAE under the same conditions.",
+        "Fidelity errors compare probability-weighted branch expectations, not individual sampled outcomes.",
+        "Decoupled has no quantum-state prediction and is omitted from Figure 5(b).",
         "The swapping ablation and complete chained workflow are different experiments.",
+        "",
+        "## Model errors at the shortest start interval",
+        "",
+        "MAE takes the absolute paired error before averaging sessions and traffic phases.",
+        "Bias retains its sign (model minus Full Sync); positive bias means overprediction.",
+        "All fidelity values below are dimensionless, with 95% phase-bootstrap intervals.",
+        "",
+        "| Load | Model | Latency MAE (us) [CI] | Fidelity MAE [CI] | Fidelity bias [CI] |",
+        "|---:|---|---:|---:|---:|",
     ]
+    error_cells = []
+    for g in summary["ablation_groups"]:
+        if g["request_interval_ns"] != summary["plan"]["request_intervals_ns"][0]:
+            continue
+        row = {k: g[k] for k in ("classical_load", "request_interval_ns", "model")}
+        for key in ("latency_mae_ns", "expected_fidelity_mae", "expected_fidelity_bias"):
+            estimate = g[key]
+            row[key] = None if estimate is None else estimate["mean"]
+            bounds = estimate["ci95_cluster_bootstrap"] if estimate is not None else None
+            row[key + "_low"], row[key + "_high"] = bounds or [None, None]
+        error_cells.append(row)
+        lines.append(
+            "| {} | {} | {} | {} | {} |".format(
+                g["classical_load"],
+                LABELS[MODELS.index(g["model"])],
+                interval_text(g["latency_mae_ns"], scale=1000),
+                (
+                    interval_text(g["expected_fidelity_mae"], digits=5)
+                    if g["expected_fidelity_mae"] is not None
+                    else "not defined"
+                ),
+                (
+                    interval_text(g["expected_fidelity_bias"], digits=5)
+                    if g["expected_fidelity_bias"] is not None
+                    else "not defined"
+                ),
+            )
+        )
+    write_csv(output / "model_error_cells.csv", error_cells)
     (output / "RESULTS.md").write_text("\n".join(lines) + "\n")
     provenance = dict(
         passed=True,
@@ -436,7 +500,7 @@ def render(source, output):
         files={str(p.relative_to(output)): digest(p) for p in output.rglob("*") if p.is_file()},
     )
     (output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
-    print("PASS: verified reports and rendered Figures 3, 4 and 5 in " + str(output))
+    print("PASS: verified reports and rendered Figures 3, 4, 5(a) and 5(b) in " + str(output))
 
 
 if __name__ == "__main__":

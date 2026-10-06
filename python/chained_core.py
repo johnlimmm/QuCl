@@ -18,7 +18,9 @@ class ChainedCore(NativeExecutionCore):
         a = QuantumProcessor("A", num_positions=2 * len(config["chains"]))
         noise = config["memory_noise"]
         for position in a.mem_positions:
-            position.models["noise_model"] = T1T2NoiseModel(T1=noise["T1_ns"], T2=noise["T2_ns"])
+            position.models["noise_model"] = T1T2NoiseModel(
+                T1=noise["T1_ns"], T2=noise["T2_ns"]
+            )
         for instruction in physical_instructions(config["native_instructions"], noise):
             a.add_physical_instruction(instruction)
         a.set_program_done_callback(self.program_done, "A", once=False)
@@ -27,7 +29,11 @@ class ChainedCore(NativeExecutionCore):
         self.processors["A"] = dict(queue=deque(), running=[], capacity=1)
         self.pending_ready = []
         self.handoffs = []
-        self.quantum_network = QuantumNetworkBackend(self)
+        self.quantum_network = self.create_quantum_network()
+
+    def create_quantum_network(self):
+        """Attach native memories before creating quantum delivery components."""
+        return QuantumNetworkBackend(self)
 
     def program_done(self, name, key=None):
         # Only a native program-done callback can authorize handing off a pair.
@@ -117,7 +123,11 @@ class ChainedTeleportAdapter(NativeTeleportAdapter):
         self.put(q, self.local[0])
         core.register(self.sid, "input", "qubit", [self.local[0]])
         core.emit(
-            "INPUT_CREATED", self.sid, core.roots[self.sid], created_ns=0, location=self.local[0]
+            "INPUT_CREATED",
+            self.sid,
+            core.roots[self.sid],
+            created_ns=0,
+            location=self.local[0],
         )
 
     def receive(self, row):
@@ -130,7 +140,9 @@ class ChainedTeleportAdapter(NativeTeleportAdapter):
         if op == "BSM":
             if any(
                 x is not y
-                for x, y in zip(self.qubits([self.local[1]] + self.survivors), self.original_pair)
+                for x, y in zip(
+                    self.qubits([self.local[1]] + self.survivors), self.original_pair
+                )
             ):
                 raise RuntimeError("teleport did not consume actual swapped pair")
             self.checkpoints.setdefault("arrival", self.input_states())

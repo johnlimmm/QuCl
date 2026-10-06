@@ -1,4 +1,8 @@
-# Reproduce the execution-coupling experiments
+# Reproduce the earlier swapping-stage comparison
+
+For the current **complete Swap–Teleport model comparison**, follow
+[Complete-workflow experiments](CHAIN-EVALUATION.md). This page preserves the
+earlier scope and its results; its model errors stop at swapping.
 
 This campaign reproduces the complete Swap → A/B Teleport comparison and the
 swapping-stage ablations used for Figures 3–5. It runs the public QuCl execution
@@ -18,7 +22,7 @@ Do not substitute the example defaults when reproducing this campaign.
 | [models.py](../experiments/models.py) | Full Sync, No R contention and Fixed classical delay execution |
 | [timing.py](../experiments/timing.py) | Independent timing checks and Decoupled timing prediction |
 | [analysis.py](../experiments/analysis.py) | Per-session errors, balanced input means and phase-bootstrap intervals |
-| [render_evaluation.py](../experiments/render_evaluation.py) | Report/CSV audit, aggregation and three figures |
+| [render_evaluation.py](../experiments/render_evaluation.py) | Report/CSV audit, aggregation and Figures 3, 4, 5(a), 5(b) |
 | [test_evaluation.py](../tests/test_evaluation.py) | Production equivalence, model isolation, failure checks and statistical-unit tests |
 
 The two C++ participants remain [cosim-chained.cc](../examples/cosim-chained.cc)
@@ -86,14 +90,22 @@ report, verifies branch probabilities and recomputes the aggregates. It produces
 |---|---|
 | `figures/fig3_chain_latency.pdf` / `.png` | Mean complete-chain latency above the zero-load, longest-interval reference |
 | `figures/fig4_teleport_fidelity.pdf` / `.png` | Absolute final teleportation fidelity; expanded vertical axis |
-| `figures/fig5_model_error.pdf` / `.png` | Swapping-stage latency MAE against Full Sync at the shortest interval |
+| `figures/fig5_a.pdf` / `.png` | Swapping-stage latency MAE against Full Sync at the shortest interval |
+| `figures/fig5_b.pdf` / `.png` | Swapping-stage Bell-pair fidelity MAE in the same conditions, for No R contention and Fixed classical delay |
 | `chain_cells.csv` | Means and 95% intervals for latency, fidelity and latency components |
+| `model_error_cells.csv` | Plotted latency/fidelity MAEs, signed fidelity bias and 95% intervals; undefined fidelity entries remain empty |
 | `result_phase_coupling.csv` | Per-session change in result delay when R waiting is removed |
 | `RESULTS.md`, `provenance.json`, `FIGURES.pdf` | Readable summary, source/data hashes and combined figures |
 
 Figures use compact dimensions, pastel blue/orange/pink, distinct hatches or
 markers, and short axis labels. No plot titles are added. Generated output stays
 outside Git; the scripts and profile are the reproducibility artifact.
+
+Figure 5(b) uses probability-weighted expected fidelity for each paired model
+and Full Sync run. Absolute differences are taken before averaging sessions
+within each traffic phase; the phase means are then bootstrapped. This is
+Bell-pair fidelity after swapping, distinct from the teleported-state fidelity
+in Figure 4. Decoupled has no state prediction, so it has no fidelity bar.
 
 ## Quantum profile and its sources
 
