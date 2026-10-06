@@ -24,9 +24,14 @@ Official dependency instructions:
 
 ## 1. System packages and source checkouts
 
-On Ubuntu 22.04:
+Download and extract the review artifact. Open a terminal in its root directory
+(the directory containing `CMakeLists.txt`, `python/` and `scenarios/`).
+On Ubuntu 22.04, run:
 
 ```bash
+export QUCL_SOURCE_DIR="$(pwd -P)"
+test -f "$QUCL_SOURCE_DIR/CMakeLists.txt"
+
 sudo apt update
 sudo apt install -y git g++ cmake ninja-build python3 python3-venv pkg-config
 
@@ -36,11 +41,12 @@ git clone --branch ns-3.47 --depth 1 https://gitlab.com/nsnam/ns-3-dev.git ns-3.
 cd ns-3.47
 git clone https://github.com/QuantumInternet-it/q2ns.git contrib/q2ns
 git -C contrib/q2ns checkout --detach f22ba28f437099ba3cf9956ca332ba5ce8bb14fd
-git clone https://github.com/johnlimmm/qucl.git contrib/cosim
+cp -a "$QUCL_SOURCE_DIR" contrib/cosim
 ```
 
 Keep the `contrib/cosim` directory name: it is the ns-3 module name used by the
-build and example runners. The repository name on GitHub is QuCl.
+build and example runners. The source snapshot does not require a Git checkout
+or access to an author-owned repository.
 
 Q2NS includes its own required C++ quantum-backend headers. Those headers are
 needed to build Q2NS even though QuCl delegates external-session quantum states
