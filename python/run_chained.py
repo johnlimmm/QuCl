@@ -9,7 +9,7 @@ from runtime import HybridValidationFailure
 from runtime import save_report
 from gate_noise import split_config, install_gate_noise
 from chained_config import normalize_config
-from chained_core import ChainedCore, ChainedSwapAdapter, ChainedTeleportAdapter, ChainedFederation
+from chained_core import ChainedCore, ChainedSwapAdapter, ChainedTeleportAdapter, ChainedCoordinator
 from chained_participant import ChainedParticipant
 
 
@@ -40,10 +40,10 @@ class ChainedManager:
             core.adapters[swap["session_id"]] = ChainedSwapAdapter(core, swap, slot)
             core.adapters[tele["session_id"]] = ChainedTeleportAdapter(core, tele, slot)
         p = ChainedParticipant(self.binary, self.config, core.roots)
-        federation = ChainedFederation(core, p)
+        coordinator = ChainedCoordinator(core, p)
         execution_error = None
         try:
-            snapshot = federation.run()
+            snapshot = coordinator.run()
             p.finish()
         except (RuntimeError, ValueError) as error:
             execution_error = error
@@ -59,8 +59,8 @@ class ChainedManager:
             time_unit="ns",
             snapshot=snapshot,
             events=core.events,
-            ns3_events=federation.rows,
-            bridge_steps=federation.steps,
+            ns3_events=coordinator.rows,
+            bridge_steps=coordinator.steps,
             native_instructions=core.instruction_events,
             q2ns_status=getattr(p, "q2ns_status", None),
         )

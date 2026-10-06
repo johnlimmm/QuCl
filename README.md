@@ -4,6 +4,9 @@ QuCl connects **ns-3 and Q2NS classical protocol execution** to **NetSquid quant
 state evolution**. Real packet arrivals and native quantum program completions
 jointly determine when the next operation can execute.
 
+QuCl is a co-simulation framework that addresses **execution coupling** through
+**cross-simulator event coordination**.
+
 The main example performs **entanglement swapping at R, followed by teleportation
 from A to B using the resulting A–B pair**. NetSquid executes timed gates, memory
 noise and quantum-channel delivery. Q2NS retains its protocol applications and
@@ -24,7 +27,7 @@ the tables below are relative to this repository's root.
 |---|---|
 | ns-3 event stepping and IPC | [cosim-bridge.h](model/cosim-bridge.h) advances ns-3 at synchronization boundaries and exchanges messages with Python. |
 | Readiness and background UDP traffic | [cosim-agent-app.cc](model/cosim-agent-app.cc) provides the UDP helper; protocol result packets use Q2NS applications. |
-| Shared quantum execution | [execution_core.py](python/execution_core.py) manages requests and resource ownership; [native_core.py](python/native_core.py) runs the shared FIFOs, native completion callbacks and federation. |
+| Shared quantum execution | [execution_core.py](python/execution_core.py) manages requests and resource ownership; [native_core.py](python/native_core.py) runs the shared FIFOs, native completion callbacks and cross-simulator event coordination. |
 | NetSquid gates and quantum channels | [native_programs.py](python/native_programs.py) defines timed BSM/correction programs; [quantum_network_backend.py](python/quantum_network_backend.py) handles EPR-half delivery and memory placement. |
 | Swap-to-Teleport handoff | [chained_core.py](python/chained_core.py) transfers the actual swapped A/B qubits to the teleport session. |
 | Q2NS application changes | [SwapApp patch](integrations/q2ns-swap-external.patch) and [TeleportationApp patch](integrations/q2ns-teleport-external.patch), installed by [apply_q2ns_patches.py](scripts/apply_q2ns_patches.py). |

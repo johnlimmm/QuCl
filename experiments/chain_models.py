@@ -10,7 +10,7 @@ from chained_core import (
     ChainedCore,
     ChainedSwapAdapter,
     ChainedTeleportAdapter,
-    ChainedFederation,
+    ChainedCoordinator,
 )
 from chained_participant import ChainedParticipant
 from chained_validation import validate_report, metrics
@@ -234,9 +234,9 @@ def run_chain_model(raw, model="Full-Sync", delays=None, enumerate_branches=True
             c, core.roots, delays
         )
     )
-    federation = ChainedFederation(core, p)
+    coordinator = ChainedCoordinator(core, p)
     try:
-        snapshot = federation.run()
+        snapshot = coordinator.run()
         if network:
             p.finish()
     finally:
@@ -250,14 +250,14 @@ def run_chain_model(raw, model="Full-Sync", delays=None, enumerate_branches=True
         time_unit="ns",
         snapshot=snapshot,
         events=core.events,
-        bridge_steps=federation.steps,
+        bridge_steps=coordinator.steps,
         native_instructions=core.instruction_events,
     )
     if network:
         report.update(
             nodes=p.nodes,
             ns3_time_ns=p.now_ns,
-            ns3_events=federation.rows,
+            ns3_events=coordinator.rows,
             q2ns_status=p.q2ns_status,
         )
     else:
@@ -265,7 +265,7 @@ def run_chain_model(raw, model="Full-Sync", delays=None, enumerate_branches=True
             if row["source"] == "ns3":
                 row["source"] = "decoupled" if model == "Decoupled" else "fixed-delay"
         report.update(
-            transport_events=federation.rows,
+            transport_events=coordinator.rows,
             transport=(
                 "per-workflow frozen No-R paths; no packet feedback"
                 if model == "Decoupled"

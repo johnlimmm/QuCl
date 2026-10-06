@@ -50,7 +50,7 @@ class NativeExecutionCore(HybridExecutionCore):
         return self.devices[request["processor_id"]]
 
     def advance(self, at):
-        raise RuntimeError("native backend must run through NativeHybridFederation")
+        raise RuntimeError("native backend must run through CrossSimulatorCoordinator")
 
     def dispatch(self):
         self.sync_time()
@@ -164,7 +164,7 @@ class NativeExecutionCore(HybridExecutionCore):
             )
         )
         if self.wakeup is None:
-            raise RuntimeError("native completion has no federation receiver")
+            raise RuntimeError("native completion has no coordinator receiver")
         self.wakeup(self.now_ns)
 
     def check(self):
@@ -198,7 +198,7 @@ class NativeExecutionCore(HybridExecutionCore):
             raise RuntimeError("orphaned native request")
 
 
-class NativeHybridFederation(pydynaa.Entity):
+class CrossSimulatorCoordinator(pydynaa.Entity):
     """Merge ns-3 inputs and native quantum events in the actual NetSquid calendar.
 
     Existing ns-3 events at t are drained before injecting new completions at t.
@@ -228,7 +228,7 @@ class NativeHybridFederation(pydynaa.Entity):
         at = c.now_ns
         self.pending.remove(at)
         if len(self.steps) >= 100000:
-            raise RuntimeError("native federation step limit")
+            raise RuntimeError("native coordination step limit")
         c.round = len(self.steps)
         c.phase = "NS3"
         completed = c.completed
@@ -244,7 +244,7 @@ class NativeHybridFederation(pydynaa.Entity):
         c.dispatch()
         p.inject(at, completed)
         if c.now_ns != p.now_ns:
-            raise RuntimeError("native federation clock mismatch")
+            raise RuntimeError("native coordination clock mismatch")
         self.steps.append(
             dict(
                 time_ns=at,
@@ -266,7 +266,7 @@ class NativeHybridFederation(pydynaa.Entity):
             or self.core.completed
             or any(p["queue"] or p["running"] for p in self.core.processors.values())
         ):
-            raise RuntimeError("native federation did not drain")
+            raise RuntimeError("native coordination did not drain")
         if self.core.now_ns != self.participant.now_ns or ns.sim_count_events():
             raise RuntimeError("native final clocks/events mismatch")
         return self.core.snapshot()

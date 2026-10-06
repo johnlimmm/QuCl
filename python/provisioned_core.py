@@ -1,6 +1,6 @@
 """Resource delivery gates the unchanged native shared R/B execution core."""
 
-from native_core import NativeExecutionCore, NativeHybridFederation
+from native_core import NativeExecutionCore, CrossSimulatorCoordinator
 from native_adapters import NativeSwapAdapter, NativeTeleportAdapter
 from protocol_adapters import STATES
 from netsquid.qubits import qubitapi as qapi
@@ -70,7 +70,7 @@ class ProvisionedAdapter:
         )
         c.pending_ready.append(dict(session_id=self.sid, cause=event))
         if c.wakeup is None:
-            raise RuntimeError("delivery has no federation receiver")
+            raise RuntimeError("delivery has no coordinator receiver")
         c.wakeup(c.now_ns)
 
     def receive(self, row):
@@ -92,7 +92,7 @@ class ProvisionedTeleportAdapter(ProvisionedAdapter, NativeTeleportAdapter):
     pass
 
 
-class ProvisionedFederation(NativeHybridFederation):
+class ProvisionedCoordinator(CrossSimulatorCoordinator):
     def step(self, event):
         # Same native calendar and callback-driven execution; readiness is an
         # additional domain event, never an invented BSM completion.

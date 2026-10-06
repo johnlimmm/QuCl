@@ -8,7 +8,7 @@ from native_core import NativeExecutionCore
 from native_programs import physical_instructions
 from native_adapters import NativeTeleportAdapter
 from protocol_adapters import STATES
-from provisioned_core import ProvisionedSwapAdapter, ProvisionedFederation
+from provisioned_core import ProvisionedSwapAdapter, ProvisionedCoordinator
 from quantum_network_backend import QuantumNetworkBackend
 
 
@@ -180,6 +180,6 @@ class ChainedTeleportAdapter(NativeTeleportAdapter):
         return value
 
 
-# The same conservative federation transports only elementary-pair readiness
+# The same conservative coordinator transports only elementary-pair readiness
 # through ideal IPC. Teleport readiness is exclusively an actual ns-3 packet.
-ChainedFederation = ProvisionedFederation
+ChainedCoordinator = ProvisionedCoordinator

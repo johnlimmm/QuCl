@@ -9,7 +9,7 @@ from runtime import HybridValidationFailure, session_metrics, save_report
 from provisioned_config import normalize_config
 from provisioned_core import (
     ProvisionedCore,
-    ProvisionedFederation,
+    ProvisionedCoordinator,
     ProvisionedSwapAdapter,
     ProvisionedTeleportAdapter,
 )
@@ -43,9 +43,9 @@ class ProvisionedManager:
                 ProvisionedSwapAdapter if s["protocol"] == "swap" else ProvisionedTeleportAdapter
             )(core, s, slot)
         p = ProvisionedParticipant(self.binary, self.config, core.roots)
-        federation = ProvisionedFederation(core, p)
+        coordinator = ProvisionedCoordinator(core, p)
         try:
-            snapshot = federation.run()
+            snapshot = coordinator.run()
             p.finish()
         finally:
             p.close()
@@ -56,14 +56,14 @@ class ProvisionedManager:
             nodes=p.nodes,
             config=self.config,
             execution_core="ProvisionedCore(NativeExecutionCore)",
-            federation="ProvisionedFederation(NativeHybridFederation)",
+            coordinator="ProvisionedCoordinator(CrossSimulatorCoordinator)",
             ns3_binary=str(self.binary),
             ns3_time_ns=p.now_ns,
             time_unit="ns",
             snapshot=snapshot,
             events=core.events,
-            ns3_events=federation.rows,
-            bridge_steps=federation.steps,
+            ns3_events=coordinator.rows,
+            bridge_steps=coordinator.steps,
             native_instructions=core.instruction_events,
             instruction_state_recording=capture_states,
             q2ns_status=p.q2ns_status,

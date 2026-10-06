@@ -14,7 +14,7 @@ from native_core import NativeExecutionCore
 from native_programs import physical_instructions
 from provisioned_core import (
     ProvisionedCore,
-    ProvisionedFederation,
+    ProvisionedCoordinator,
     ProvisionedSwapAdapter,
     ProvisionedTeleportAdapter,
 )
@@ -240,10 +240,10 @@ def execute(
         if network
         else ProvisionedFixedParticipant(config, core.roots, delays["result_ns"])
     )
-    federation = ProvisionedFederation(core, participant)
+    coordinator = ProvisionedCoordinator(core, participant)
     t2 = time.perf_counter()
     try:
-        snapshot = federation.run()
+        snapshot = coordinator.run()
         t3 = time.perf_counter()
         if network:
             participant.finish()
@@ -259,11 +259,11 @@ def execute(
         execution_core=(
             "ProvisionedCore(NativeExecutionCore)" if model != "No-Dq-R" else "ProvisionedNoDqCore"
         ),
-        federation="ProvisionedFederation(NativeHybridFederation)",
+        coordinator="ProvisionedCoordinator(CrossSimulatorCoordinator)",
         time_unit="ns",
         snapshot=snapshot,
         events=core.events,
-        bridge_steps=federation.steps,
+        bridge_steps=coordinator.steps,
         native_instructions=core.instruction_events,
         instruction_state_recording=True,
     )
@@ -272,7 +272,7 @@ def execute(
             nodes=participant.nodes,
             ns3_binary=str(manager.binary),
             ns3_time_ns=participant.now_ns,
-            ns3_events=federation.rows,
+            ns3_events=coordinator.rows,
             q2ns_status=participant.q2ns_status,
         )
     else:
@@ -311,12 +311,12 @@ def execute(
         dict(
             core_initialization_seconds=t1 - t0,
             participant_startup_seconds=t2 - t1,
-            federation_seconds=t3 - t2,
+            coordination_seconds=t3 - t2,
             participant_finish_seconds=t4 - t3,
             simulation_seconds=t4 - t0,
             offline_validation_seconds=t5 - t4,
             simulation_seconds_per_transaction=(t4 - t0) / len(config["sessions"]),
-            federation_seconds_per_transaction=(t3 - t2) / len(config["sessions"]),
+            coordination_seconds_per_transaction=(t3 - t2) / len(config["sessions"]),
         ),
         participant,
     )

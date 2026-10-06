@@ -1,5 +1,10 @@
 # Architecture
 
+QuCl performs co-simulation of ns-3/Q2NS and NetSquid. The problem it addresses
+is execution coupling: packet arrivals, resource availability and quantum
+completions determine when subsequent operations can execute. The mechanism
+that preserves these dependencies is cross-simulator event coordination.
+
 ## Ownership and process boundary
 
 The Python process owns NetSquid's simulation, quantum states, memory positions,
@@ -34,11 +39,11 @@ ideal gate action, after active-duration storage noise. Identity slots and
 measurements receive storage noise but no additional gate depolarization.
 The independent reference implements this noise convention separately.
 
-## Time synchronization
+## Cross-simulator event coordination
 
-[NativeHybridFederation](../python/native_core.py) schedules the next ns-3 event
+[CrossSimulatorCoordinator](../python/native_core.py) schedules the next ns-3 event
 time as a wakeup on the NetSquid event calendar. Native gate and channel events
-execute on that calendar. A completion schedules a same-time federation wakeup,
+execute on that calendar. A completion schedules a same-time coordination wakeup,
 so its classical consequence cannot be injected after ns-3 has advanced past it.
 The [C++ bridge](../model/cosim-bridge.h) uses the public ns-3 simulator hook and
 scheduler interface to execute bounded event batches at the requested time.
@@ -48,6 +53,16 @@ to ns-3. Packet/application events generate requests, which are admitted to the
 appropriate quantum FIFO. Additional work at the same timestamp is processed
 before advancing. Integer-nanosecond checks, ordered event IDs and causal links
 are enforced in the reports.
+
+[ProvisionedCoordinator](../python/provisioned_core.py) adds resource-ready
+notifications to this coordination. [ChainedCoordinator](../python/chained_core.py)
+uses the same implementation for the Swap-to-Teleport workflow; teleportation
+readiness still arrives through the actual ns-3 packet path.
+
+Reports that identify the implementation use the `coordinator` field.
+The event-boundary trace remains `bridge_steps`. Optional runtime profiles use
+`coordination_seconds` and `coordination_seconds_per_transaction` for the time
+spent executing the coordinated event loop.
 
 For independent sessions, already-ready starts at a timestamp precede readiness
 notifications delivered at that timestamp. Within each group, configuration
