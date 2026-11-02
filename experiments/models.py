@@ -10,7 +10,7 @@ import heapq
 import time
 from netsquid.components import QuantumProcessor
 from netsquid.components.models.qerrormodels import T1T2NoiseModel
-from native_core import NativeExecutionCore
+from native_core import QuantumExecutionManager
 from native_programs import physical_instructions
 from provisioned_core import (
     ProvisionedCore,
@@ -49,7 +49,7 @@ class RMemoryView:
         return [self.devices[p // 2].pop(p % 2)[0] for p in positions]
 
 
-class NativeNoDqCore(NativeExecutionCore):
+class NativeNoDqCore(QuantumExecutionManager):
     def __init__(self, config, capture_states=True):
         super().__init__(config, capture_states)
         self.r_capacity = len(config["sessions"])
@@ -257,9 +257,9 @@ def execute(
         model=model,
         config=config,
         execution_core=(
-            "ProvisionedCore(NativeExecutionCore)" if model != "No-Dq-R" else "ProvisionedNoDqCore"
+            "ProvisionedCore(QuantumExecutionManager)" if model != "No-Dq-R" else "ProvisionedNoDqCore"
         ),
-        coordinator="ProvisionedCoordinator(CrossSimulatorCoordinator)",
+        coordinator="ProvisionedCoordinator(CrossSimulatorEventCoordinator)",
         time_unit="ns",
         snapshot=snapshot,
         events=core.events,

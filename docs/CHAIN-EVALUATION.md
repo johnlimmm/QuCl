@@ -1,5 +1,9 @@
 # Complete Swap–Teleport comparison
 
+For **actual standalone Q2NS / NetSquid / QuCl execution**, see
+[Standalone simulator comparison](SIMULATOR-COMPARISON.md). The models on this
+page remain controlled ablations and retain their original names.
+
 This campaign compares **the entire workflow** in every model: native swapping
 at R, delivery of the swap result, B correction, B–R–A pair-readiness delivery,
 native teleportation at A using that same physical pair, A–R–B result delivery,

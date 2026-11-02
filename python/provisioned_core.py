@@ -1,13 +1,13 @@
 """Resource delivery gates the unchanged native shared R/B execution core."""
 
-from native_core import NativeExecutionCore, CrossSimulatorCoordinator
+from native_core import QuantumExecutionManager, CrossSimulatorEventCoordinator
 from native_adapters import NativeSwapAdapter, NativeTeleportAdapter
 from protocol_adapters import STATES
 from netsquid.qubits import qubitapi as qapi
 from quantum_network_backend import QuantumNetworkBackend
 
 
-class ProvisionedCore(NativeExecutionCore):
+class ProvisionedCore(QuantumExecutionManager):
     def __init__(self, config, capture_states=True):
         super().__init__(config, capture_states)
         self.pending_ready = []
@@ -92,7 +92,7 @@ class ProvisionedTeleportAdapter(ProvisionedAdapter, NativeTeleportAdapter):
     pass
 
 
-class ProvisionedCoordinator(CrossSimulatorCoordinator):
+class ProvisionedCoordinator(CrossSimulatorEventCoordinator):
     def step(self, event):
         # Same native calendar and callback-driven execution; readiness is an
         # additional domain event, never an invented BSM completion.

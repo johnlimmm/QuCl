@@ -27,12 +27,19 @@ the tables below are relative to this repository's root.
 |---|---|
 | ns-3 event stepping and IPC | [cosim-bridge.h](model/cosim-bridge.h) advances ns-3 at synchronization boundaries and exchanges messages with Python. |
 | Readiness and background UDP traffic | [cosim-agent-app.cc](model/cosim-agent-app.cc) provides the UDP helper; protocol result packets use Q2NS applications. |
-| Shared quantum execution | [execution_core.py](python/execution_core.py) manages requests and resource ownership; [native_core.py](python/native_core.py) runs the shared FIFOs, native completion callbacks and cross-simulator event coordination. |
+| Quantum Resource Manager | [QuantumResourceManager](python/execution_core.py) identifies resources, checks ownership, reserves qubits and registers requests in processor FIFOs. |
+| Quantum Execution Manager | [QuantumExecutionManager](python/native_core.py) dispatches queued requests when processor capacity is available, executes native NetSquid programs and handles completion callbacks. |
+| Cross-Simulator Event Coordinator | [CrossSimulatorEventCoordinator](python/native_core.py) coordinates ns-3 events and native quantum events on the NetSquid event calendar. |
 | NetSquid gates and quantum channels | [native_programs.py](python/native_programs.py) defines timed BSM/correction programs; [quantum_network_backend.py](python/quantum_network_backend.py) handles EPR-half delivery and memory placement. |
 | Swap-to-Teleport handoff | [chained_core.py](python/chained_core.py) transfers the actual swapped A/B qubits to the teleport session. |
 | Q2NS application changes | [SwapApp patch](integrations/q2ns-swap-external.patch) and [TeleportationApp patch](integrations/q2ns-teleport-external.patch), installed by [apply_q2ns_patches.py](scripts/apply_q2ns_patches.py). |
 | Build definitions | [CMakeLists.txt](CMakeLists.txt) registers the module; [examples/CMakeLists.txt](examples/CMakeLists.txt) registers both C++ executables. |
 | Inputs, experiments and tests | [scenarios/](scenarios/) contains example inputs; [experiments/](experiments/) contains the full comparison campaign; [run_sweep.py](scripts/run_sweep.py) runs a small delay sweep; [tests/](tests/) contains validation tests. |
+
+The Quantum Execution Manager inherits resource management on the same object;
+the workflow-specific cores extend it. Reserving qubits and acquiring processor
+capacity remain separate conditions. See [Architecture](docs/ARCHITECTURE.md)
+for the event ordering and completion rules.
 
 This repository is installed as `contrib/cosim` inside a separate ns-3 checkout.
 The **`./ns3` build script belongs to that parent checkout**; it is supplied by
@@ -68,6 +75,15 @@ A–R and R–B EPR delivery
 There is no separate controller node or synthetic command packet. Quantum state
 exists only in NetSquid; Q2NS uses logical resource handles. Fidelity is computed
 from the live NetSquid state with `qubitapi.fidelity(..., squared=True)`.
+
+## Standalone simulator comparison
+
+The optional [standalone comparison](docs/SIMULATOR-COMPARISON.md) executes the
+same complete workflow using native Q2NS state operations or a single NetSquid
+event loop. Q2NS-only uses instantaneous, noise-free quantum operations;
+NetSquid-only uses calibrated native classical channels and the same timed
+quantum model as QuCl. These are explicitly different models. The production
+co-simulation path described above is unchanged.
 
 ## Start here
 
