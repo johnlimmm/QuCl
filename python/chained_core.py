@@ -4,7 +4,7 @@ from collections import deque
 from netsquid.components import QuantumProcessor
 from netsquid.components.models.qerrormodels import T1T2NoiseModel
 from netsquid.qubits import qubitapi as qapi
-from native_core import NativeExecutionCore
+from native_core import QuantumExecutionManager
 from native_programs import physical_instructions
 from native_adapters import NativeTeleportAdapter
 from protocol_adapters import STATES
@@ -12,7 +12,7 @@ from provisioned_core import ProvisionedSwapAdapter, ProvisionedCoordinator
 from quantum_network_backend import QuantumNetworkBackend
 
 
-class ChainedCore(NativeExecutionCore):
+class ChainedCore(QuantumExecutionManager):
     def __init__(self, config, capture_states=True):
         super().__init__(config, capture_states)
         a = QuantumProcessor("A", num_positions=2 * len(config["chains"]))

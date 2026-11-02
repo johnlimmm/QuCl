@@ -93,7 +93,7 @@ For the component/event model, see the
 | Execution | Classical transport | Quantum execution | Required implementation |
 |---|---|---|---|
 | QuCl | Actual ns-3/Q2NS packets on A--R--B | NetSquid timed gates, shared R/A/B FIFO and memory noise | Existing complete-chain runner |
-| NetSquid-only, calibrated classical delay | NetSquid classical channels with separately calibrated delays | The same quantum instruction/noise definitions and FIFO policy as QuCl | A standalone NetSquid event loop and protocols; no ns-3 process, IPC or QuCl cross-simulator coordinator |
+| NetSquid-only, calibrated classical delay | NetSquid classical channels with separately calibrated delays | The same quantum instruction/noise definitions and FIFO policy as QuCl | A standalone NetSquid event loop and protocols; no ns-3 process, IPC or QuCl cross-simulator event coordinator |
 | Q2NS-only, native quantum execution | Actual ns-3/Q2NS packets on A--R--B | Q2NS density-matrix backend with its native timing and supported noise semantics | A native chained scenario with same-qubit handoff; no NetSquid process or delegated state calculation |
 
 The Q2NS scenario may adapt application/resource wiring to accept existing

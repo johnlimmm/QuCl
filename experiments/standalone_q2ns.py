@@ -1,6 +1,6 @@
 """Run actual Q2NS density-matrix operations in one native ns-3 process.
 
-The executable uses no NetSquid, socket or cross-simulator coordinator. The
+The executable uses no NetSquid, socket or cross-simulator event coordinator. The
 Python launcher shares QuCl's configuration parser only, and explicitly rejects
 noise this comparison adapter does not implement. Configured QuCl instruction
 durations are retained as metadata; Q2NS applies operations instantaneously.

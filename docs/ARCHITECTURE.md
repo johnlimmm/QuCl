@@ -17,15 +17,26 @@ The socket is an implementation channel. Its wall-clock latency never appears
 as simulated network propagation or serialization. Fidelity and density matrices
 are diagnostic outputs in the Python process, not classical protocol payloads.
 
-## Native instruction execution
+## Quantum resource and execution management
 
-[HybridExecutionCore](../python/execution_core.py) provides the session/request
-registry, ownership checks and FIFO data structures.
-[NativeExecutionCore](../python/native_core.py) submits real
+The **Quantum Resource Manager**
+([`QuantumResourceManager`](../python/execution_core.py)) maintains resource and
+request identities, checks physical-qubit ownership, reserves resources and
+registers requests in processor FIFO queues. A successful reservation protects
+the qubits while the request waits; it does not imply that a processor is free.
+
+The **Quantum Execution Manager**
+([`QuantumExecutionManager`](../python/native_core.py)) dispatches queued requests
+when processor capacity is available and submits real
 [QuantumPrograms](../python/native_programs.py) to NetSquid QuantumProcessors.
 A BSM contains CNOT, H and two sequential measurements. Correction contains
 X-or-identity and Z-or-identity slots. Program-completion callbacks release the
 processor and return results to the correct Q2NS application.
+
+These responsibilities share the existing execution object:
+`QuantumExecutionManager` inherits `QuantumResourceManager`, and `ChainedCore`
+and `ProvisionedCore` retain their workflow-specific extensions. They do not
+create a separate resource manager, scheduler process or additional event loop.
 
 No operation is completed solely because a predicted end timestamp has elapsed.
 Instruction start/completion checkpoints are diagnostic observations inserted
@@ -41,28 +52,32 @@ The independent reference implements this noise convention separately.
 
 ## Cross-simulator event coordination
 
-[CrossSimulatorCoordinator](../python/native_core.py) schedules the next ns-3 event
-time as a wakeup on the NetSquid event calendar. Native gate and channel events
-execute on that calendar. A completion schedules a same-time coordination wakeup,
+The **Cross-Simulator Event Coordinator**
+([`CrossSimulatorEventCoordinator`](../python/native_core.py)) schedules the next
+ns-3 event time as a wakeup on the NetSquid event calendar. Native gate and
+channel events execute on that calendar. A completion schedules a same-time coordination wakeup,
 so its classical consequence cannot be injected after ns-3 has advanced past it.
 The [C++ bridge](../model/cosim-bridge.h) uses the public ns-3 simulator hook and
 scheduler interface to execute bounded event batches at the requested time.
 
-At a boundary, completed programs and resource-ready notifications are delivered
-to ns-3. Packet/application events generate requests, which are admitted to the
-appropriate quantum FIFO. Additional work at the same timestamp is processed
-before advancing. Integer-nanosecond checks, ordered event IDs and causal links
-are enforced in the reports.
+At a boundary, existing ns-3 events at that timestamp are drained first. Their
+requests enter the appropriate quantum FIFO, and queued work is dispatched if
+processor capacity permits. Pending resource-ready notifications and native
+program completions are then delivered to ns-3. Additional work at the same
+timestamp is processed before advancing. Integer-nanosecond checks, ordered
+event IDs and causal links are enforced in the reports.
 
 [ProvisionedCoordinator](../python/provisioned_core.py) adds resource-ready
 notifications to this coordination. [ChainedCoordinator](../python/chained_core.py)
 uses the same implementation for the Swap-to-Teleport workflow; teleportation
 readiness still arrives through the actual ns-3 packet path.
 
-Reports that identify the implementation use the `coordinator` field.
+Reports that identify the implementation retain the `execution_core` and
+`coordinator` fields and use the current class names in their values.
 The event-boundary trace remains `bridge_steps`. Optional runtime profiles use
 `coordination_seconds` and `coordination_seconds_per_transaction` for the time
 spent executing the coordinated event loop.
+Archived reports retain the class names recorded when they were generated.
 
 For independent sessions, already-ready starts at a timestamp precede readiness
 notifications delivered at that timestamp. Within each group, configuration
@@ -79,7 +94,7 @@ Pauli frame; correction makes it usable.
 
 [QuantumNetworkBackend](../python/quantum_network_backend.py) creates the native
 nodes and lossless quantum channels. Actual channel-port arrivals place remote
-EPR halves into destination memories. The quantum-resource manager supplies
+EPR halves into destination memories. Workflow resource management supplies
 ideal zero-delay knowledge of initial delivery readiness to Q2NS; a heralding
 protocol is not modeled.
 

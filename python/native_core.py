@@ -7,12 +7,19 @@ This avoids stepping past a classical input or relying on private PyDynAA APIs.
 
 import netsquid as ns
 import pydynaa
-from execution_core import HybridExecutionCore
+from execution_core import QuantumResourceManager
 from native_programs import physical_instructions
 from limits import MAX_TIME_NS
 
 
-class NativeExecutionCore(HybridExecutionCore):
+class QuantumExecutionManager(QuantumResourceManager):
+    """Dispatch reserved requests when processor capacity permits execution.
+
+    Resource management is inherited on the same object. Native NetSquid
+    program callbacks complete requests, release occupancy and notify the
+    event coordinator; no separate resource-management process is created.
+    """
+
     def __init__(self, config, capture_states=True):
         super().__init__(config)
         self.capture_states = capture_states
@@ -50,7 +57,7 @@ class NativeExecutionCore(HybridExecutionCore):
         return self.devices[request["processor_id"]]
 
     def advance(self, at):
-        raise RuntimeError("native backend must run through CrossSimulatorCoordinator")
+        raise RuntimeError("native backend must run through CrossSimulatorEventCoordinator")
 
     def dispatch(self):
         self.sync_time()
@@ -198,7 +205,7 @@ class NativeExecutionCore(HybridExecutionCore):
             raise RuntimeError("orphaned native request")
 
 
-class CrossSimulatorCoordinator(pydynaa.Entity):
+class CrossSimulatorEventCoordinator(pydynaa.Entity):
     """Merge ns-3 inputs and native quantum events in the actual NetSquid calendar.
 
     Existing ns-3 events at t are drained before injecting new completions at t.

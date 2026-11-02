@@ -8,7 +8,13 @@ from netsquid.components.models.qerrormodels import T1T2NoiseModel
 from limits import MAX_TIME_NS, integer
 
 
-class HybridExecutionCore:
+class QuantumResourceManager:
+    """Register resources and requests, reserve ownership and maintain FIFO queues.
+
+    A reservation protects the request's qubits while it waits; it does not
+    occupy a processor. The execution manager dispatches eligible queued work.
+    """
+
     def __init__(self, config, r_capacity=1):
         ns.sim_reset()
         ns.set_qstate_formalism(ns.QFormalism.DM)

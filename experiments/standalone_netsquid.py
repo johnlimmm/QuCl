@@ -1,7 +1,7 @@
 """Standalone NetSquid chain: native classical channels and a single event calendar.
 
 Quantum programs, resource ownership and FIFO policy are shared with QuCl.
-There is no ns-3 participant, socket or cross-simulator coordinator. The small
+There is no ns-3 participant, socket or cross-simulator event coordinator. The small
 protocol below reacts to native resource, channel and program-done events.
 """
 
