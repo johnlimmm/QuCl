@@ -1,0 +1,106 @@
+{
+  "profile": "complete-chain-literature-gates-memory-20ms-10ms",
+  "citations": [
+    "10.1038/s41598-022-08901-x",
+    "10.3390/s23187891",
+    "10.1038/s41534-023-00773-x"
+  ],
+  "native_instructions": {
+    "cnot_ns": 20000,
+    "h_ns": 5,
+    "measure_ns": 3700,
+    "x_ns": 5,
+    "z_ns": 5
+  },
+  "memory_noise": {
+    "model": "T1T2NoiseModel",
+    "T1_ns": 20000000,
+    "T2_ns": 10000000
+  },
+  "gate_depolar_probability": 0.01,
+  "request_intervals_ns": [
+    13703,
+    27405,
+    54810
+  ],
+  "interval_factors": [
+    0.5,
+    1.0,
+    2.0
+  ],
+  "classical_loads": [
+    0.0,
+    0.75
+  ],
+  "test_traffic_seeds": [
+    1000,
+    1001,
+    1002,
+    1003,
+    1004,
+    1005,
+    1006,
+    1007,
+    1008,
+    1009,
+    1010,
+    1011,
+    1012,
+    1013,
+    1014,
+    1015
+  ],
+  "calibration_traffic_seeds": [
+    100,
+    101,
+    102,
+    103
+  ],
+  "quantum_seed": 7,
+  "first_start_ns": 2000000,
+  "sessions": 4,
+  "classical_link": {
+    "rate_bps": 100000000,
+    "delay_ns": 100000
+  },
+  "quantum_links": {
+    "RA": {
+      "delay_ns": 800000,
+      "depolar_rate_hz": 0
+    },
+    "RB": {
+      "delay_ns": 1200000,
+      "depolar_rate_hz": 0
+    }
+  },
+  "background_payload_bytes": 1000,
+  "background_end_ns": 5000000,
+  "calibration_interval_ns": 548100,
+  "bootstrap_samples": 10000,
+  "fidelity_min": 0.5,
+  "deadline_ns": 5000000,
+  "notes": [
+    "Serial CNOT/H/M/M = 27405 ns; half interval rounded up from 13702.5 ns.",
+    "Actual X/Z gates receive independent per-qubit depolarization before action, after active T1/T2; idle slots and ideal measurements receive storage noise only.",
+    "No separate readout error, source imperfection or quantum channel loss/noise; this is a literature-parameterized abstract processor, not a device reproduction.",
+    "100 Mb/s makes a swap result serialize in 8.8 us, below the shortest interval; network choices are controlled scenario assumptions.",
+    "All resources are created at t=0 and ready before the first request. Later sessions include additional storage age.",
+    "Zero load executes once per interval because traffic phase is inactive.",
+    "Feasibility thresholds are retained for audit only and are not the primary endpoint.",
+    "Memory values occur in Bugalho et al. (2023), Fig. 3a; uniform use across all memories is a QuCl abstraction. Not one calibrated hardware platform.",
+    "Six separate four-chain batches per traffic condition; each batch uses a single input state. Average equally over states and sessions within phase before bootstrap.",
+    "Latency and packets must have the same timing across all six input states; fixed correction slots prevent branch-dependent service durations.",
+    "All comparison models complete Swap at R, pair-readiness delivery, Teleport at A and final B correction. Errors target the original input and final Bob output.",
+    "Fixed-Dc calibrates swap-result, pair-ready and teleport-result paths separately with disjoint traffic phases. Decoupled replays shared R/A/B FIFO with per-workflow No-R path delays held fixed; native NetSquid replays that schedule to calculate the final output state and fidelity.",
+    "Start intervals of 0.5x, 1x and 2x the R BSM service time intentionally create R waiting, its boundary, and no R waiting. They are controlled finite-batch interventions, not empirically fitted arrival rates. A/B and packet queues remain enabled.",
+    "Calibration starts are separated by 20 R BSM service times; every workflow must finish before background traffic ends and every processor wait must be zero."
+  ],
+  "input_states": [
+    "0",
+    "1",
+    "+",
+    "-",
+    "+i",
+    "-i"
+  ]
+}

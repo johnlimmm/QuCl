@@ -92,141 +92,7 @@ def validate_report(report, *, r_capacity=1, network=True):
                 "causal event identity/time",
             )
         seen[event["event_id"]] = event["sim_time_ns"]
-    ids, hops = set(), []
-    if network:
-        packet_rows = [
-            r
-            for r in rows
-            if r["event_type"]
-            in (
-                "RESULT_TX",
-                "RESULT_RX",
-                "BACKGROUND_TX",
-                "BACKGROUND_RX",
-                "PAIR_READY_TX",
-                "PAIR_READY_RX",
-                "QUEUE_ENQUEUE",
-                "QUEUE_DEQUEUE",
-                "PHY_TX",
-                "PHY_TX_END",
-                "PHY_RX",
-            )
-        ]
-        ids = {r["message_id"] for r in packet_rows}
-        require(
-            len(ids) == 3 * len(c["chains"]) + c["background"]["result"]["count"],
-            "packet count",
-        )
-        hops = []
-        for pid in ids:
-            own = [r for r in packet_rows if r["message_id"] == pid]
-            kind = own[0]["kind"]
-            sid = own[0]["session_id"]
-            app = "BACKGROUND" if kind == 4 else "PAIR_READY" if kind == 6 else "RESULT"
-            tx, rx = only(own, app + "_TX"), only(own, app + "_RX")
-            protocol = next(
-                (s["protocol"] for s in c["sessions"] if s["session_id"] == sid), None
-            )
-            route = (
-                [(2, 1, "BR"), (1, 0, "RA")]
-                if kind == 6
-                else (
-                    [(0, 1, "AR"), (1, 2, "RB")] if protocol == "teleport" else [(1, 2, "RB")]
-                )
-            )
-            require(
-                tx["node_id"] == route[0][0] and rx["node_id"] == route[-1][1],
-                "packet route endpoints",
-            )
-            require(len(own) == 2 + 5 * len(route), "packet trace multiplicity")
-            expected_bytes = (
-                16
-                if kind == 6
-                else (
-                    2
-                    if protocol == "teleport"
-                    else (
-                        c["background"]["result"]["payload_bytes"]
-                        if kind == 4
-                        else c["result_payload_bytes"]
-                    )
-                )
-            )
-            require(
-                tx["packet_bytes"] == rx["packet_bytes"] == expected_bytes,
-                "application payload bytes",
-            )
-            if kind == 4:
-                f = c["background"]["result"]
-                i = pid - 100000
-                require(
-                    sid == 0
-                    and 0 <= i < f["count"]
-                    and tx["time_ns"] == f["start_ns"] + i * f["interval_ns"],
-                    "background schedule",
-                )
-            at = tx["time_ns"]
-            for src, dst, link in route:
-                stages = {
-                    name: only(
-                        [r for r in own if r["node_id"] == (dst if name == "PHY_RX" else src)],
-                        name,
-                    )
-                    for name in (
-                        "QUEUE_ENQUEUE",
-                        "QUEUE_DEQUEUE",
-                        "PHY_TX",
-                        "PHY_TX_END",
-                        "PHY_RX",
-                    )
-                }
-                cfg = c["access_link"] if link in ("AR", "RA") else c["result_link"]
-                duration = tx_duration_ns(expected_bytes, cfg["rate_bps"])
-                en, de, pt, end, pr = [
-                    stages[k]["time_ns"]
-                    for k in (
-                        "QUEUE_ENQUEUE",
-                        "QUEUE_DEQUEUE",
-                        "PHY_TX",
-                        "PHY_TX_END",
-                        "PHY_RX",
-                    )
-                ]
-                require(
-                    en == at
-                    and de == pt
-                    and end == pt + duration
-                    and pr == end + cfg["delay_ns"],
-                    "packet hop timing " + link,
-                )
-                require(
-                    all(r["packet_bytes"] == expected_bytes + 30 for r in stages.values()),
-                    "wire byte accounting",
-                )
-                hops.append(
-                    dict(
-                        link=link,
-                        enqueue_ns=en,
-                        dequeue_ns=de,
-                        end_ns=end,
-                        sequence=stages["QUEUE_ENQUEUE"]["source_sequence"],
-                    )
-                )
-                at = pr
-            require(rx["time_ns"] == at, "application receive timing")
-        # Independent FIFO recurrence uses observed queue arrival/order as inputs;
-        # multi-hop causality above determines those arrivals from prior deliveries.
-        for link in ("AR", "RA", "RB", "BR"):
-            free = 0
-            for h in sorted(
-                [h for h in hops if h["link"] == link],
-                key=lambda h: (h["enqueue_ns"], h["sequence"]),
-            ):
-                require(
-                    h["dequeue_ns"] == max(free, h["enqueue_ns"]),
-                    "independent link FIFO " + link,
-                )
-                free = h["end_ns"]
+    ids, hops = validate_packets(c, rows) if network else (set(), [])
     requests = snap["requests"]
     require(len(requests) == 4 * len(c["chains"]), "request count")
     resources = {(r["session_id"], r["handle"]): r for r in snap["resources"]}
@@ -410,3 +276,135 @@ def metrics(report):
             )
         )
     return dict(chains=chains, batch_completion_ns=max(r["completion_ns"] for r in chains))
+
+
+def validate_packets(c, rows):
+    """Shared independent wire-size, routing and per-link FIFO oracle."""
+    require(not any("DROP" in r["event_type"] for r in rows), "packet drop")
+    packet_rows = [
+        r
+        for r in rows
+        if r["event_type"]
+        in (
+            "RESULT_TX",
+            "RESULT_RX",
+            "BACKGROUND_TX",
+            "BACKGROUND_RX",
+            "PAIR_READY_TX",
+            "PAIR_READY_RX",
+            "QUEUE_ENQUEUE",
+            "QUEUE_DEQUEUE",
+            "PHY_TX",
+            "PHY_TX_END",
+            "PHY_RX",
+        )
+    ]
+    ids = {r["message_id"] for r in packet_rows}
+    require(
+        len(ids) == 3 * len(c["chains"]) + c["background"]["result"]["count"],
+        "packet count",
+    )
+    hops = []
+    for pid in ids:
+        own = [r for r in packet_rows if r["message_id"] == pid]
+        kind = own[0]["kind"]
+        sid = own[0]["session_id"]
+        app = "BACKGROUND" if kind == 4 else "PAIR_READY" if kind == 6 else "RESULT"
+        tx, rx = only(own, app + "_TX"), only(own, app + "_RX")
+        protocol = next((s["protocol"] for s in c["sessions"] if s["session_id"] == sid), None)
+        route = (
+            [(2, 1, "BR"), (1, 0, "RA")]
+            if kind == 6
+            else ([(0, 1, "AR"), (1, 2, "RB")] if protocol == "teleport" else [(1, 2, "RB")])
+        )
+        require(
+            tx["node_id"] == route[0][0] and rx["node_id"] == route[-1][1],
+            "packet route endpoints",
+        )
+        require(len(own) == 2 + 5 * len(route), "packet trace multiplicity")
+        expected_bytes = (
+            16
+            if kind == 6
+            else (
+                2
+                if protocol == "teleport"
+                else (
+                    c["background"]["result"]["payload_bytes"]
+                    if kind == 4
+                    else c["result_payload_bytes"]
+                )
+            )
+        )
+        require(
+            tx["packet_bytes"] == rx["packet_bytes"] == expected_bytes,
+            "application payload bytes",
+        )
+        if kind == 4:
+            f = c["background"]["result"]
+            i = pid - 100000
+            require(
+                sid == 0
+                and 0 <= i < f["count"]
+                and tx["time_ns"] == f["start_ns"] + i * f["interval_ns"],
+                "background schedule",
+            )
+        at = tx["time_ns"]
+        for src, dst, link in route:
+            stages = {
+                name: only(
+                    [r for r in own if r["node_id"] == (dst if name == "PHY_RX" else src)],
+                    name,
+                )
+                for name in (
+                    "QUEUE_ENQUEUE",
+                    "QUEUE_DEQUEUE",
+                    "PHY_TX",
+                    "PHY_TX_END",
+                    "PHY_RX",
+                )
+            }
+            cfg = c["access_link"] if link in ("AR", "RA") else c["result_link"]
+            duration = tx_duration_ns(expected_bytes, cfg["rate_bps"])
+            en, de, pt, end, pr = [
+                stages[k]["time_ns"]
+                for k in (
+                    "QUEUE_ENQUEUE",
+                    "QUEUE_DEQUEUE",
+                    "PHY_TX",
+                    "PHY_TX_END",
+                    "PHY_RX",
+                )
+            ]
+            require(
+                en == at and de == pt and end == pt + duration and pr == end + cfg["delay_ns"],
+                "packet hop timing " + link,
+            )
+            require(
+                all(r["packet_bytes"] == expected_bytes + 30 for r in stages.values()),
+                "wire byte accounting",
+            )
+            hops.append(
+                dict(
+                    link=link,
+                    enqueue_ns=en,
+                    dequeue_ns=de,
+                    end_ns=end,
+                    sequence=stages["QUEUE_ENQUEUE"]["source_sequence"],
+                )
+            )
+            at = pr
+        require(rx["time_ns"] == at, "application receive timing")
+    # Independent FIFO recurrence uses observed queue arrival/order as inputs;
+    # multi-hop causality above determines those arrivals from prior deliveries.
+    for link in ("AR", "RA", "RB", "BR"):
+        free = 0
+        for h in sorted(
+            [h for h in hops if h["link"] == link],
+            key=lambda h: (h["enqueue_ns"], h["sequence"]),
+        ):
+            require(
+                h["dequeue_ns"] == max(free, h["enqueue_ns"]),
+                "independent link FIFO " + link,
+            )
+            free = h["end_ns"]
+    return ids, hops

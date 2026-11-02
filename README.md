@@ -69,6 +69,15 @@ There is no separate controller node or synthetic command packet. Quantum state
 exists only in NetSquid; Q2NS uses logical resource handles. Fidelity is computed
 from the live NetSquid state with `qubitapi.fidelity(..., squared=True)`.
 
+## Standalone simulator comparison
+
+The optional [standalone comparison](docs/SIMULATOR-COMPARISON.md) executes the
+same complete workflow using native Q2NS state operations or a single NetSquid
+event loop. Q2NS-only uses instantaneous, noise-free quantum operations;
+NetSquid-only uses calibrated native classical channels and the same timed
+quantum model as QuCl. These are explicitly different models. The production
+co-simulation path described above is unchanged.
+
 ## Start here
 
 1. Follow [Installation](docs/INSTALL.md) to install the pinned dependencies and

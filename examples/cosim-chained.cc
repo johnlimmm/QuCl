@@ -13,6 +13,8 @@
 #include "ns3/traffic-control-helper.h"
 #include "ns3/traffic-control-layer.h"
 
+#include "q2ns-chain-backend.h"
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <vector>
@@ -336,10 +338,14 @@ void TraceTcDrop(TraceBuffer *trace, uint32_t node, Ptr<const Packet> packet)
     trace->Add("TC_DROP", node, h, EventIdString(h.txSequence), packet->GetSize());
 }
 
-void RunParticipant(Wire &wire)
+template <typename Transport>
+void RunParticipant(Transport &wire, bool standalone = false)
 {
     Time::SetResolution(Time::NS);
-    Simulator::SetImplementation(CreateObject<SteppingSimulator>());
+    if (standalone)
+        Simulator::SetImplementation(CreateObject<DefaultSimulatorImpl>());
+    else
+        Simulator::SetImplementation(CreateObject<SteppingSimulator>());
     ObjectFactory factory;
     factory.SetTypeId(VisibleScheduler::GetTypeId());
     Simulator::SetScheduler(factory);
@@ -396,18 +402,36 @@ void RunParticipant(Wire &wire)
         flows.push_back(flow);
     }
 
+    Q2nsChainBackend native;
+    int64_t nativeSeed = 0, raDelay = 0, rbDelay = 0;
+    std::map<uint64_t, std::string> nativeInputs;
+    if (standalone)
+    {
+        Parse(wire.Read(), tag, nativeSeed, raDelay, rbDelay);
+        Require(tag == "NATIVE" && nativeSeed >= 0 && raDelay >= 0 && rbDelay >= 0 &&
+                    raDelay <= MAX_TIME && rbDelay <= MAX_TIME, "invalid native config");
+        for (auto sid : sessionOrder)
+            if (!sessions.at(sid).protocol)
+            {
+                uint64_t actual;
+                std::string input;
+                Parse(wire.Read(), tag, actual, input);
+                Require(tag == "INPUT" && actual == sid, "invalid native input order");
+                nativeInputs[sid] = input;
+            }
+    }
     q2ns::QStateRegistry registry;
     NodeContainer nodes;
     for (int i = 0; i < 3; ++i)
         nodes.Add(CreateObject<q2ns::QNode>(registry));
-    // Use actual Q2NS nodes/apps; NetSquid remains the sole quantum-state owner.
+    // Coupled mode leaves quantum ownership to NetSquid; standalone uses Q2NS DM.
     InternetStackHelper internet;
     internet.SetIpv6StackInstall(false);
     internet.Install(nodes);
     TraceBuffer trace;
     for (auto node : {A, R, B})
     {
-        nodes.Get(node)->GetObject<TrafficControlLayer>()->TraceConnectWithoutContext(
+        nodes.Get(node)->template GetObject<TrafficControlLayer>()->TraceConnectWithoutContext(
             "TcDrop", MakeBoundCallback(&TraceTcDrop, &trace, node));
     }
     auto link = [&](uint32_t from, uint32_t to, uint64_t rate, int64_t delay, const char *subnet)
@@ -543,6 +567,13 @@ void RunParticipant(Wire &wire)
             h.message = 0;
             auto id = trace.Add("BSM_REQUEST", R, h, eligibilityCause(sid));
             nativeTrace("Q2NS_BSM_REQUEST", R, sid, EventIdString(id));
+            if (standalone)
+            {
+                auto bits = native.Bsm(sid, false);
+                completionCauses[sid] = EventIdString(id);
+                Require(repeater->CompleteExternalBsm(sid, bits.first, bits.second),
+                        "native swap completion rejected");
+            }
         },
         {});
     endpoint->SetExternalQuantumCallbacks(
@@ -558,6 +589,12 @@ void RunParticipant(Wire &wire)
             h.m2 = m2;
             auto id = trace.Add("CORRECTION_REQUEST", B, h, resultCauses.at(sid));
             nativeTrace("Q2NS_CORRECTION_REQUEST", B, sid, EventIdString(id), m1, m2);
+            if (standalone)
+            {
+                native.Correct(sid, false, m1, m2);
+                correctionCauses[sid] = EventIdString(id);
+                Require(endpoint->CompleteExternalCorrection(sid), "native swap correction rejected");
+            }
         });
     repeater->SetExternalPacketObservers(
         [&](uint64_t sid, uint8_t m1, uint8_t m2, Ptr<Packet> packet)
@@ -664,6 +701,13 @@ void RunParticipant(Wire &wire)
                     h.pairA = h.pairB = h.output = 0;
                     auto id = trace.Add("BSM_REQUEST", A, h, eligibilityCause(sid));
                     nativeTrace("Q2NS_TELEPORT_BSM_REQUEST", A, sid, EventIdString(id));
+                    if (standalone)
+                    {
+                        auto bits = native.Bsm(sessions.at(sid).parent, true);
+                        completionCauses[sid] = EventIdString(id);
+                        Require(teleSource.at(sid)->CompleteExternalBsm(sid, bits.first, bits.second),
+                                "native teleport completion rejected");
+                    }
                 },
                 {});
             sink->ConfigureExternal(
@@ -681,6 +725,13 @@ void RunParticipant(Wire &wire)
                     auto id = trace.Add("CORRECTION_REQUEST", B, h, resultCauses.at(sid));
                     nativeTrace("Q2NS_TELEPORT_CORRECTION_REQUEST", B, sid, EventIdString(id), m1,
                                 m2);
+                    if (standalone)
+                    {
+                        native.Correct(sessions.at(sid).parent, true, m1, m2);
+                        correctionCauses[sid] = EventIdString(id);
+                        Require(teleSink.at(sid)->CompleteExternalCorrection(sid),
+                                "native teleport correction rejected");
+                    }
                 });
             source->SetExternalPacketObservers(
                 [&, sid](uint64_t actual, uint8_t m1, uint8_t m2, Ptr<Packet> packet)
@@ -777,6 +828,20 @@ void RunParticipant(Wire &wire)
         Require(++startupEvents <= MAX_BATCH, "application startup event limit");
         Simulator::Run();
     }
+    if (standalone)
+        native.Initialize(nodes, registry, nativeSeed, raDelay, rbDelay, nativeInputs,
+                          [&](uint64_t sid)
+                          {
+                              Require(!resourcesReady[sid], "duplicate native readiness");
+                              resourcesReady[sid] = true;
+                              Q2nsHeader h;
+                              h.session = sid;
+                              h.message = 0;
+                              triggerCauses[sid] = EventIdString(trace.Add(
+                                  "Q2NS_RESOURCES_READY", R, h, sessions.at(sid).root));
+                              Require(swapGate.NotifyExternalResourcesReady(sid),
+                                      "native Swap readiness failed");
+                          });
     // Deliver readiness traces at t=0 through the normal bridge boundary.
     Simulator::ScheduleNow([] {});
     // Background packets use a separate port and never invoke quantum requests.
@@ -816,6 +881,21 @@ void RunParticipant(Wire &wire)
                                                       : swapGate.StartExternalSession(sid),
                                         "duplicate Q2NS session start");
                             });
+    }
+    if (standalone)
+    {
+        // One native ns-3 event loop, with no bridge/socket/coordinator.
+        Simulator::Run();
+        Require(correctionsApplied == sessionCount, "incomplete native chain");
+        for (const auto &entry : native.chains)
+            Require(entry.second.complete, "unfinished native output");
+        for (const auto &row : trace.rows) wire.Send(row);
+        for (const auto &row : native.rows) wire.Send(row);
+        wire.Send("NATIVE_DONE " + std::to_string(Simulator::Now().GetNanoSeconds()) + " " +
+                  std::to_string(correctionsApplied) + " " +
+                  std::to_string(registry.GetStatesSortedById().size()));
+        Simulator::Destroy();
+        return;
     }
     wire.Send("NODES " + std::to_string(nodes.GetN()) + " " +
               std::to_string(nodes.Get(A)->GetId()) + " " + std::to_string(nodes.Get(R)->GetId()) +
@@ -959,16 +1039,45 @@ void RunParticipant(Wire &wire)
     }
     Simulator::Destroy();
 }
+// Batch files transport configuration/results only, never synchronize events.
+class BatchFiles
+{
+  public:
+    std::ifstream input;
+    std::ofstream output;
+    BatchFiles(const std::string &config, const std::string &result) : input(config), output(result)
+    {
+        Require(input.good() && output.good(), "cannot open native batch files");
+    }
+    std::string Read()
+    {
+        std::string line;
+        Require(static_cast<bool>(std::getline(input, line)), "truncated native batch config");
+        return line;
+    }
+    void Send(const std::string &line) { output << line << '\n'; }
+};
 } // namespace
 
 int main(int argc, char **argv)
 {
     int bridgeFd = -1;
+    std::string nativeConfig, nativeOutput;
     CommandLine cmd(__FILE__);
     cmd.AddValue("bridgeFd", "Inherited Unix socket from run_chained.py", bridgeFd);
+    cmd.AddValue("nativeConfig", "Standalone Q2NS batch configuration", nativeConfig);
+    cmd.AddValue("nativeOutput", "Standalone Q2NS trace output", nativeOutput);
     cmd.Parse(argc, argv);
     try
     {
+        if (!nativeConfig.empty())
+        {
+            Require(bridgeFd < 0 && !nativeOutput.empty() && nativeConfig != nativeOutput,
+                    "standalone mode requires distinct config/output and no bridge");
+            BatchFiles files(nativeConfig, nativeOutput);
+            RunParticipant(files, true);
+            return 0;
+        }
         Require(bridgeFd >= 0, "launch with contrib/cosim/python/run_chained.py");
         Wire wire(bridgeFd);
         RunParticipant(wire);
